@@ -1,0 +1,36 @@
+@startuml cat weight activity
+
+(*) --> "Setup"
+"Setup" --> "Init Tare"
+"Init Tare" --> "Read buttons"
+if "Button pressed" then
+    -->[true] "clickTare"
+    --> ===Button_long_pressed===
+else
+    ->[false] ===Button_long_pressed===
+endif
+if "Button long pressed" then
+    -->[true] "clickCalibration"
+    --> "Read scale"
+else
+    ->[false] "Read scale"
+endif
+
+if "Weight > delta && state == empty" then
+    -->[true] "state = occupied"
+    if "Weight > delta" then
+        -->[true] "Read scale and save to buffer"
+        --> "state = occupied"
+    else
+        ->[false] "Send buffer via MQTT"
+        --> "state = empty"
+    endif
+else
+    ->[false] "state = empty"
+endif
+
+--> "Tare new weight"
+--> "Read buttons"
+
+
+@enduml
