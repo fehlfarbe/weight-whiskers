@@ -4,6 +4,10 @@
 .vscode/c_cpp_properties.json
 .vscode/
 
+*.zip
+*.pdf
+hardware/~*
+
 # Prerequisites
 *.d
 
