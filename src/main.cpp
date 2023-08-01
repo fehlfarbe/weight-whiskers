@@ -8,8 +8,9 @@
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <WebServer.h>
-#include <IotWebConf.h>
-#include <IotWebConfOptionalGroup.h>
+#include <ESPAsyncWebServer.h>
+#include <ESPAsyncWiFiManager.h>
+#include <ESPmDNS.h>
 #include <PubSubClient.h>
 #include <FastLED.h>
 #include <RunningAverage.h>
@@ -63,12 +64,14 @@ FilterOnePole weightLowPass = FilterOnePole(LOWPASS, 0.5, 0);
 
 struct CatMeasurement
 {
+  time_t time = 0;
   float weight = 0.;
   float sigma = 0.;
   float variance = 0.;
 };
 CatMeasurement measuredCatWeightsBuffer[20];
 int measuredCatWeightsCounter = 0;
+String measurementsFile = "/measurements.csv";
 
 // Config
 struct Config
@@ -92,27 +95,9 @@ Config config;
 // WiFi
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
-
-DNSServer dnsServer;
-WebServer server(80);
-
-#define CONFIG_VERSION "opt1"
-#define STRING_LEN 128
-
-char conf_mqtt_server[STRING_LEN];
-char conf_mqtt_port[6];
-char conf_mqtt_topic_cat_weight[STRING_LEN];
-char conf_mqtt_topic_current_weight[STRING_LEN];
-
-IotWebConf iotWebConf("catscale", &dnsServer, &server, "catscale1234", CONFIG_VERSION);
-iotwebconf::OptionalParameterGroup mqttSetupGroup = iotwebconf::OptionalParameterGroup("mqtt", "MQTT", false);
-iotwebconf::TextParameter mqttServerParam = iotwebconf::TextParameter("Server", "mqtt_server", conf_mqtt_server, STRING_LEN);
-iotwebconf::NumberParameter mqttPortParam = iotwebconf::NumberParameter("Port", "mqtt_port", conf_mqtt_port, 6);
-iotwebconf::TextParameter mqttTopicCatWeightParam = iotwebconf::NumberParameter("Topic cat weight", "mqtt_topic_cat_weight", conf_mqtt_topic_cat_weight, STRING_LEN);
-iotwebconf::TextParameter mqttTopicCurrentWeightParam = iotwebconf::NumberParameter("Topic current weight", "mqtt_topic_current_weight", conf_mqtt_topic_current_weight, STRING_LEN);
-
-// -- An instance must be created from the class defined above.
-iotwebconf::OptionalGroupHtmlFormatProvider optionalGroupHtmlFormatProvider;
+DNSServer dns;
+AsyncWebServer server(80);
+AsyncWiFiManager wifiManager(&server, &dns);
 
 // declarations
 void loadConfig();
@@ -121,10 +106,13 @@ void printConfig();
 void tare(int count);
 void calibrate(float weight);
 void displayWeight(float weight);
-void handleRoot();
+void handleRoot(AsyncWebServerRequest *request);
+void handleConfig(AsyncWebServerRequest *request);
+void handleMeasurements(AsyncWebServerRequest *request);
 void saveConfigCallback();
 void setupMQTT();
 void sendMQTTCatWeights();
+bool writeMeasurement(CatMeasurement &m);
 
 void setup()
 {
@@ -158,7 +146,8 @@ void setup()
   if (!LittleFS.begin(true))
   {
     Serial.println("An Error has occurred while mounting LittleFS");
-    while(true){
+    while (true)
+    {
       digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
       delay(500);
     }
@@ -167,32 +156,29 @@ void setup()
   loadConfig();
   printConfig();
 
-  // WiFi / WebConf
-  mqttSetupGroup.addItem(&mqttServerParam);
-  mqttSetupGroup.addItem(&mqttPortParam);
-  mqttSetupGroup.addItem(&mqttTopicCatWeightParam);
-  mqttSetupGroup.addItem(&mqttTopicCurrentWeightParam);
-
-  iotWebConf.setHtmlFormatProvider(&optionalGroupHtmlFormatProvider);
-  iotWebConf.addParameterGroup(&mqttSetupGroup);
-  iotWebConf.setConfigSavedCallback(&saveConfigCallback);
-
-  // leds[0] = CRGB::Orange;
   // FastLED.show();
   display.println("WiFi...");
   display.display();
+  if (!wifiManager.autoConnect("weight-whiskers"))
+  {
+    Serial.println("failed to connect, we should reset as see if it connects");
+    display.println("AP Mode");
+    display.display();
+  }
 
-  // Initializing the configuration.
-  iotWebConf.init();
+  // setup mDNS
+  MDNS.begin("weight-whiskers");
 
   // Set up required URL handlers on the web server.
-  server.on("/", handleRoot);
-  server.on("/config", []
-            { iotWebConf.handleConfig(); });
-  server.onNotFound([]()
-                    { iotWebConf.handleNotFound(); });
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/config", HTTP_GET, handleConfig);
+  server.on("/measurements", HTTP_GET, handleMeasurements);
+  server.begin();
 
-  iotWebConf.goOnLine();
+  // setup time
+  display.println("NTP...");
+  display.display();
+  configTime(0, 0, "pool.ntp.org");
 
   // set MQTT
   setupMQTT();
@@ -268,9 +254,6 @@ void setup()
 
 void loop()
 {
-  // web interface
-  iotWebConf.doLoop();
-
   // over the air update
   ArduinoOTA.handle();
 
@@ -342,11 +325,13 @@ void loop()
       leds[0] = CRGB::Green;
       FastLED.show();
       CatMeasurement measurement;
+      time(&measurement.time); // Get current timestamp
       measurement.weight = statistics.mean();
       measurement.sigma = statistics.sigma();
       measurement.variance = statistics.variance();
       measuredCatWeightsBuffer[measuredCatWeightsCounter] = measurement; // save value to send via mqtt
       measuredCatWeightsCounter++;
+      writeMeasurement(measurement);
       displayWeight(statistics.mean());
       delay(5000);
 
@@ -450,70 +435,63 @@ void displayWeight(float weight)
   display.display();
 }
 
-void saveConfigCallback()
+void handleRoot(AsyncWebServerRequest *request)
 {
-  Serial.println("Save config");
+  // // -- Let IotWebConf test and handle captive portal requests.
+  // if (iotWebConf.handleCaptivePortal())
+  // {
+  //   // -- Captive portal request were already served.
+  //   return;
+  // }
+  // String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
+  // s += "<title>IotWebConf 13 Optional Group</title></head><div>Status page of ";
+  // s += iotWebConf.getThingName();
+  // s += ".</div>";
 
-  if (strlen(conf_mqtt_server))
-  {
-    config.mqtt_server = String(conf_mqtt_server);
-  }
-  if (strlen(conf_mqtt_port))
-  {
-    config.mqtt_port = String(conf_mqtt_port).toInt();
-  }
-  if (strlen(conf_mqtt_topic_cat_weight))
-  {
-    config.mqtt_topic_cat_weight = String(conf_mqtt_topic_cat_weight);
-  }
-  if (strlen(conf_mqtt_topic_current_weight))
-  {
-    config.mqtt_topic_current_weight = String(conf_mqtt_topic_current_weight);
-  }
+  // if (mqttSetupGroup.isActive())
+  // {
+  //   s += "<div>MQTT</div>";
+  //   s += "<ul>";
+  //   s += "<li>MQTT Server: ";
+  //   s += config.mqtt_server;
+  //   s += "<li>Port: ";
+  //   s += config.mqtt_port;
+  //   s += "<li>Cat weight topic: ";
+  //   s += config.mqtt_topic_cat_weight;
+  //   s += "<li>Current weight topic: ";
+  //   s += config.mqtt_topic_current_weight;
+  //   s += "</ul>";
+  // }
 
-  saveConfig();
-  setupMQTT();
+  // s += "Go to <a href='config'>configure page</a> to change values.";
+  // s += "</body></html>\n";
+
+  request->send(200, "text/html", "WeightWhiskers");
 }
 
-void handleRoot()
+void handleConfig(AsyncWebServerRequest *request)
 {
-  // -- Let IotWebConf test and handle captive portal requests.
-  if (iotWebConf.handleCaptivePortal())
-  {
-    // -- Captive portal request were already served.
-    return;
-  }
-  String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
-  s += "<title>IotWebConf 13 Optional Group</title></head><div>Status page of ";
-  s += iotWebConf.getThingName();
-  s += ".</div>";
+  String s = 
+  "<html><head></head><body><form action='/config' method='POST'>"
+  "MQTT Server: <input type='text' name='mqtt_server' value='" + config.mqtt_server + "'/><br>"
+  "MQTT Port: <input type='text' name='mqtt_port' value='" + config.mqtt_port + "'/><br>";
+  "MQTT topic weight: <input type='text' name='mqtt_topic_cat_weight' value='" + config.mqtt_topic_cat_weight + "'/><br>";
+  "MQTT topic current: <input type='text' name='mqtt_topic_current_weight'value='" + config.mqtt_topic_current_weight + "'/><br>"
+  "<input type='submit' /></form></body></html>";
+  request->send(200, "text/html", s);
+}
 
-  if (mqttSetupGroup.isActive())
-  {
-    s += "<div>MQTT</div>";
-    s += "<ul>";
-    s += "<li>MQTT Server: ";
-    s += config.mqtt_server;
-    s += "<li>Port: ";
-    s += config.mqtt_port;
-    s += "<li>Cat weight topic: ";
-    s += config.mqtt_topic_cat_weight;
-    s += "<li>Current weight topic: ";
-    s += config.mqtt_topic_current_weight;
-    s += "</ul>";
-  }
-
-  s += "Go to <a href='config'>configure page</a> to change values.";
-  s += "</body></html>\n";
-
-  server.send(200, "text/html", s);
+void handleMeasurements(AsyncWebServerRequest *request)
+{
+  request->send(LittleFS, measurementsFile);
 }
 
 void loadConfig()
 {
   File file = LittleFS.open("/config.json", "r");
-  
-  if(!file) {
+
+  if (!file)
+  {
     Serial.println("config.json does not exist!");
     return;
   }
@@ -641,4 +619,32 @@ void sendMQTTCatWeights()
     // reset counter
     measuredCatWeightsCounter = 0;
   }
+}
+
+bool writeMeasurement(CatMeasurement &m)
+{
+
+  bool writeHeader = false;
+  if (!LittleFS.exists(measurementsFile))
+  {
+    writeHeader = true;
+  }
+
+  File f = LittleFS.open(measurementsFile, "a", true);
+
+  if (!f)
+  {
+    Serial.printf("Cannot open measurements file %s\n", measurementsFile);
+    return false;
+  }
+
+  if (writeHeader)
+  {
+    f.printf("time,weight,sigma,variance\n");
+  }
+
+  f.printf("%g,%d,%.2f,%.2f\n", m.time, m.weight, m.sigma, m.variance);
+  f.close();
+
+  return true;
 }
