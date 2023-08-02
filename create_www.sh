@@ -1,0 +1,23 @@
+#!/bin/bash
+
+PROJECT_DIR="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+cd $PROJECT_DIR
+echo "Project path: $PROJECT_DIR"
+
+APP_ROOT="${PROJECT_DIR}/www/weight-whiskers/"
+APP_BUILD="${PROJECT_DIR}/www/weight-whiskers/build/"
+APP_WWW="${PROJECT_DIR}/data/www"
+
+# build react app
+npm run build --prefix ${APP_ROOT}
+
+# create filesystem image
+rm -r ${APP_WWW}/*
+mkdir -p ${APP_WWW}
+cp -r ${APP_BUILD}* ${APP_WWW}
+
+for f in `find ${APP_WWW}`
+do
+    echo $f
+    gzip -f $f
+done

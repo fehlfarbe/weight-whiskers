@@ -17,6 +17,7 @@
 #include <RunningMedian.h>
 #include <Filters.h>
 #include <ArduinoOTA.h>
+#include <AsyncJson.h>
 #include <ArduinoJson.h>
 
 // Button
@@ -36,6 +37,8 @@
 // #define SCALE_DELTA 10
 #define BUFSIZE 55
 #define DISPLAY_TEXT_SIZE 4
+
+#define JSON_BUFFER 2048
 
 enum ScaleState
 {
@@ -100,16 +103,17 @@ AsyncWebServer server(80);
 AsyncWiFiManager wifiManager(&server, &dns);
 
 // declarations
-void loadConfig();
-void saveConfig();
+bool loadConfig();
+bool saveConfig();
 void printConfig();
+void listDir(fs::FS &fs, const char *dirname, uint8_t levels);
 void tare(int count);
 void calibrate(float weight);
 void displayWeight(float weight);
-void handleRoot(AsyncWebServerRequest *request);
+void apCallback(AsyncWiFiManager *mgr);
 void handleConfig(AsyncWebServerRequest *request);
+void handleConfigUpdate(AsyncWebServerRequest * request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleMeasurements(AsyncWebServerRequest *request);
-void saveConfigCallback();
 void setupMQTT();
 void sendMQTTCatWeights();
 bool writeMeasurement(CatMeasurement &m);
@@ -153,26 +157,35 @@ void setup()
     }
   }
   delay(5000);
-  loadConfig();
+
+  // load config or create config file with default values if not existing
+  listDir(LittleFS, "/", 4);
+  if (!loadConfig())
+  {
+    saveConfig();
+  }
   printConfig();
 
-  // FastLED.show();
+  // Setup WiFi
+  Serial.println("WiFi autoconnect...");
   display.println("WiFi...");
   display.display();
+  wifiManager.setAPCallback(apCallback);
   if (!wifiManager.autoConnect("weight-whiskers"))
   {
     Serial.println("failed to connect, we should reset as see if it connects");
-    display.println("AP Mode");
-    display.display();
   }
 
   // setup mDNS
   MDNS.begin("weight-whiskers");
+  Serial.println("Visit the config site at http://weight-whiskers.local");
 
   // Set up required URL handlers on the web server.
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/config", HTTP_GET, handleConfig);
-  server.on("/measurements", HTTP_GET, handleMeasurements);
+  // server.on("/", HTTP_GET, handleRoot);
+  server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
+  // server.on("/api/config", HTTP_GET, handleConfig);
+  server.on("/api/config", HTTP_POST, handleConfig, nullptr, handleConfigUpdate);
+  server.on("/api/measurements", HTTP_GET, handleMeasurements);
   server.begin();
 
   // setup time
@@ -435,65 +448,103 @@ void displayWeight(float weight)
   display.display();
 }
 
-void handleRoot(AsyncWebServerRequest *request)
+void listDir(fs::FS &fs, const char *dirname, uint8_t levels)
 {
-  // // -- Let IotWebConf test and handle captive portal requests.
-  // if (iotWebConf.handleCaptivePortal())
-  // {
-  //   // -- Captive portal request were already served.
-  //   return;
-  // }
-  // String s = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>";
-  // s += "<title>IotWebConf 13 Optional Group</title></head><div>Status page of ";
-  // s += iotWebConf.getThingName();
-  // s += ".</div>";
+  Serial.printf("Listing directory: %s\n", dirname);
 
-  // if (mqttSetupGroup.isActive())
-  // {
-  //   s += "<div>MQTT</div>";
-  //   s += "<ul>";
-  //   s += "<li>MQTT Server: ";
-  //   s += config.mqtt_server;
-  //   s += "<li>Port: ";
-  //   s += config.mqtt_port;
-  //   s += "<li>Cat weight topic: ";
-  //   s += config.mqtt_topic_cat_weight;
-  //   s += "<li>Current weight topic: ";
-  //   s += config.mqtt_topic_current_weight;
-  //   s += "</ul>";
-  // }
+  File root = fs.open(dirname, FILE_READ, false);
+  if (!root)
+  {
+    Serial.println("Failed to open directory");
+    return;
+  }
+  if (!root.isDirectory())
+  {
+    Serial.println("Not a directory");
+    return;
+  }
 
-  // s += "Go to <a href='config'>configure page</a> to change values.";
-  // s += "</body></html>\n";
+  File file = root.openNextFile();
+  while (file)
+  {
+    if (file.isDirectory())
+    {
+      Serial.print("  DIR : ");
+      Serial.println(file.name());
+      if (levels)
+      {
+        listDir(fs, (String(dirname) + String("/") + String(file.name())).c_str(), levels - 1);
+      }
+    }
+    else
+    {
+      Serial.print("  FILE: ");
+      Serial.print(file.name());
+      Serial.print("  SIZE: ");
+      Serial.println(file.size());
+    }
+    file = root.openNextFile();
+  }
+}
 
-  request->send(200, "text/html", "WeightWhiskers");
+void apCallback(AsyncWiFiManager *mgr)
+{
+  Serial.println("Started AP");
+  display.println("AP Mode");
+  display.display();
 }
 
 void handleConfig(AsyncWebServerRequest *request)
 {
-  String s = 
-  "<html><head></head><body><form action='/config' method='POST'>"
-  "MQTT Server: <input type='text' name='mqtt_server' value='" + config.mqtt_server + "'/><br>"
-  "MQTT Port: <input type='text' name='mqtt_port' value='" + config.mqtt_port + "'/><br>";
-  "MQTT topic weight: <input type='text' name='mqtt_topic_cat_weight' value='" + config.mqtt_topic_cat_weight + "'/><br>";
-  "MQTT topic current: <input type='text' name='mqtt_topic_current_weight'value='" + config.mqtt_topic_current_weight + "'/><br>"
-  "<input type='submit' /></form></body></html>";
-  request->send(200, "text/html", s);
+  printConfig();
+  request->send(LittleFS, "/config.json", "application/json");
+}
+
+void handleConfigUpdate(AsyncWebServerRequest * request, uint8_t *data, size_t len, size_t index, size_t total)
+{
+  Serial.printf("Update config. Config size: %d/%d bytes\n", len, total);
+  if(len == total){
+    DynamicJsonDocument doc(JSON_BUFFER);
+    DeserializationError error = deserializeJson(doc, data);
+
+    // Test if parsing succeeds.
+    if (error)
+    {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.c_str());
+      request->send(500, "text/html", error.c_str());
+      return;
+    }
+
+    // open file
+    File file = LittleFS.open("/config.json", FILE_WRITE);
+
+    // Serialize JSON to file
+    if (serializeJson(doc, file) == 0)
+    {
+      Serial.println(F("Failed to write to file"));
+      request->send(500, "text/html", "Failed to write to file");
+      return;
+    }
+
+    // Close the file
+    file.close();
+  }
 }
 
 void handleMeasurements(AsyncWebServerRequest *request)
 {
-  request->send(LittleFS, measurementsFile);
+  request->send(LittleFS, measurementsFile, "text/csv");
 }
 
-void loadConfig()
+bool loadConfig()
 {
   File file = LittleFS.open("/config.json", "r");
 
   if (!file)
   {
     Serial.println("config.json does not exist!");
-    return;
+    return false;
   }
 
   // Allocate a temporary JsonDocument
@@ -507,27 +558,32 @@ void loadConfig()
     Serial.println(F("Failed to read file, using default configuration"));
 
   // Copy values from the JsonDocument to the Config
-  config.mqtt_server = doc["mqtt_server"] | config.mqtt_server;
-  config.mqtt_port = doc["mqtt_port"] | config.mqtt_port;
-  config.mqtt_topic_current_weight = doc["mqtt_topic_current_weight"] | config.mqtt_topic_current_weight;
-  config.mqtt_topic_cat_weight = doc["mqtt_topic_cat_weight"] | config.mqtt_topic_cat_weight;
+  config.mqtt_server = doc["mqttServer"] | config.mqtt_server;
+  config.mqtt_port = doc["mqttPort"] | config.mqtt_port;
+  config.mqtt_topic_current_weight = doc["mqttTopicCurrentWeight"] | config.mqtt_topic_current_weight;
+  config.mqtt_topic_cat_weight = doc["mqttTopicCatWeight"] | config.mqtt_topic_cat_weight;
 
-  config.scale_calib_value = doc["scale_calib_value"] | config.scale_calib_value;
-  config.scale_calib_weight = doc["scale_calib_weight"] | config.scale_calib_weight;
-  config.scale_weight_min = doc["scale_weight_min"] | config.scale_weight_min;
+  config.scale_calib_value = doc["scaleCalibValue"] | config.scale_calib_value;
+  config.scale_calib_weight = doc["scaleCalibWeight"] | config.scale_calib_weight;
+  config.scale_weight_min = doc["scaleWeightMin"] | config.scale_weight_min;
+
+  config.scale_tare_time = doc["scaleTareTime"] | config.scale_tare_time;
+  config.scale_tare_thresh = doc["scaleTareThresh"] | config.scale_tare_thresh;
 
   // Close the file (Curiously, File's destructor doesn't close the file)
   file.close();
+
+  return true;
 }
 
-void saveConfig()
+bool saveConfig()
 {
   // Open file for writing
   File file = LittleFS.open("/config.json", "w");
   if (!file)
   {
     Serial.println(F("Failed to create file"));
-    return;
+    return false;
   }
 
   // Allocate a temporary JsonDocument
@@ -536,14 +592,17 @@ void saveConfig()
   StaticJsonDocument<512> doc;
 
   // Set the values in the document
-  doc["mqtt_server"] = config.mqtt_server;
-  doc["mqtt_port"] = config.mqtt_port;
-  doc["mqtt_topic_cat_weight"] = config.mqtt_topic_cat_weight;
-  doc["mqtt_topic_current_weight"] = config.mqtt_topic_current_weight;
+  doc["mqttServer"] = config.mqtt_server;
+  doc["mqttPort"] = config.mqtt_port;
+  doc["mqttTopicCurrentWeight"] = config.mqtt_topic_cat_weight;
+  doc["mqttTopicCatWeight"] = config.mqtt_topic_current_weight;
 
-  doc["scale_calib_value"] = config.scale_calib_value;
-  doc["scale_calib_weight"] = config.scale_calib_weight;
-  doc["scale_weight_min"] = config.scale_weight_min;
+  doc["scaleCalibValue"] = config.scale_calib_value;
+  doc["scaleCalibWeight"] = config.scale_calib_weight;
+  doc["scaleWeightMin"] = config.scale_weight_min;
+
+  doc["scaleTareTime"] = config.scale_tare_time;
+  doc["scaleTareThresh"] = config.scale_tare_thresh;
 
   // Serialize JSON to file
   if (serializeJson(doc, file) == 0)
@@ -553,6 +612,8 @@ void saveConfig()
 
   // Close the file
   file.close();
+
+  return true;
 }
 
 void printConfig()

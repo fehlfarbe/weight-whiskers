@@ -7,6 +7,9 @@
 *.zip
 *.pdf
 hardware/~*
+hardware/gerbers
+hardware/stencil
+data
 
 # Prerequisites
 *.d

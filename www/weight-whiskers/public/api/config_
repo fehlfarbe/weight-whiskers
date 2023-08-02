@@ -1,0 +1,1 @@
+{"mqttServer":"","mqttPort":1883,"mqttTopicCurrentWeight":"home/cat/scale/measured","mqttTopicCatWeight":"home/cat/scale/current","scaleCalibValue":1,"scaleCalibWeight":500,"scaleWeightMin":2000,"scaleTareTime":60000,"scaleTareThresh":50}
