@@ -28,16 +28,13 @@
 // HX711 circuit wiring
 #define LOADCELL_DOUT_PIN 10
 #define LOADCELL_SCK_PIN 11
-#define SDA 34
-#define SCL 33
+// Display
+#define SDA 42
+#define SCL 41
 // constants
-// #define CALIB_WEIGHT 500 // weight in grams
-// #define SCALE_MIN_WEIGHT 2000 // weight in grams
 #define SCALE_DELAY_MS 100
-// #define SCALE_DELTA 10
 #define BUFSIZE 55
 #define DISPLAY_TEXT_SIZE 4
-
 #define JSON_BUFFER 2048
 
 enum ScaleState
@@ -112,7 +109,7 @@ void calibrate(float weight);
 void displayWeight(float weight);
 void apCallback(AsyncWiFiManager *mgr);
 void handleConfig(AsyncWebServerRequest *request);
-void handleConfigUpdate(AsyncWebServerRequest * request, uint8_t *data, size_t len, size_t index, size_t total);
+void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleMeasurements(AsyncWebServerRequest *request);
 void setupMQTT();
 void sendMQTTCatWeights();
@@ -137,9 +134,9 @@ void setup()
   display.setTextColor(WHITE);
 
   // LED
-  FastLED.addLeds<WS2811, LED_EXTRA, RGB>(leds, LED_NUM);
+  FastLED.addLeds<WS2812B, LED_EXTRA, RGB>(leds, LED_NUM);
   FastLED.setBrightness(50);
-  leds[0] = CRGB::Black;
+  leds[0] = CRGB::Aqua;
   FastLED.show();
 
   // setup button button
@@ -268,7 +265,7 @@ void setup()
 void loop()
 {
   // over the air update
-  ArduinoOTA.handle();
+  // ArduinoOTA.handle();
 
   // MQTT
   mqtt.loop();
@@ -297,7 +294,10 @@ void loop()
   auto current = millis();
   if (scale.wait_ready_timeout(1000))
   {
-    weightLowPass.input(scale.get_units(2));
+    auto weight = scale.get_units(2);
+    auto raw = scale.get_value();
+    Serial.printf("Current measurement: %fg raw: %f\n", weight, raw);
+    weightLowPass.input(weight);
   }
   else
   {
@@ -500,10 +500,11 @@ void handleConfig(AsyncWebServerRequest *request)
   request->send(LittleFS, "/config.json", "application/json");
 }
 
-void handleConfigUpdate(AsyncWebServerRequest * request, uint8_t *data, size_t len, size_t index, size_t total)
+void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
 {
   Serial.printf("Update config. Config size: %d/%d bytes\n", len, total);
-  if(len == total){
+  if (len == total)
+  {
     DynamicJsonDocument doc(JSON_BUFFER);
     DeserializationError error = deserializeJson(doc, data);
 
