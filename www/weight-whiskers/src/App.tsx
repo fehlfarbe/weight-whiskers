@@ -3,6 +3,7 @@ import logo from './logo.svg';
 import '../node_modules/mini.css/dist/mini-default.min.css';
 import './App.css';
 import ConfigPage from './components/ConfigPage';
+import MeasurementHistory from './components/MeasurementHistory';
 
 
 const App: React.FC = () => {
@@ -14,6 +15,7 @@ const App: React.FC = () => {
         <a href="#" className="button">Config</a>
       </header>
       <div className="container">
+        <MeasurementHistory/>
         <ConfigPage />
       </div>
     </>
