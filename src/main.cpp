@@ -13,8 +13,6 @@
 #include <ESPmDNS.h>
 #include <PubSubClient.h>
 #include <FastLED.h>
-#include <RunningAverage.h>
-#include <RunningMedian.h>
 #include <Filters.h>
 #include <ArduinoOTA.h>
 #include <AsyncJson.h>
@@ -33,6 +31,7 @@
 #define SCL 41
 // constants
 #define SCALE_DELAY_MS 100
+#define SCALE_WS_DELAY_MS 1000
 #define BUFSIZE 55
 #define DISPLAY_TEXT_SIZE 4
 #define JSON_BUFFER 2048
@@ -57,15 +56,14 @@ CRGBArray<LED_NUM> leds;
 // scale
 HX711 scale;
 long scaleLastTimestamp = 0;
+long scaleLastWSTimestamp = 0;
 long scaleLastTareThreshTimestamp = 0;
-// RunningAverage weightAverage(BUFSIZE);
-// RunningMedian weightMedian(BUFSIZE);
 FilterOnePole weightLowPass = FilterOnePole(LOWPASS, 0.5, 0);
 
 struct CatMeasurement
 {
   time_t time = 0;
-  float weight = 0.;
+  uint16_t weight = 0.;
   float sigma = 0.;
   float variance = 0.;
 };
@@ -98,12 +96,15 @@ PubSubClient mqtt(espClient);
 DNSServer dns;
 AsyncWebServer server(80);
 AsyncWiFiManager wifiManager(&server, &dns);
+AsyncWebSocket ws("/ws");
 
 // declarations
 bool loadConfig();
 bool saveConfig();
 void printConfig();
+void applyConfig();
 void listDir(fs::FS &fs, const char *dirname, uint8_t levels);
+void setupScale();
 void tare(int count);
 void calibrate(float weight);
 void displayWeight(float weight);
@@ -111,6 +112,7 @@ void apCallback(AsyncWiFiManager *mgr);
 void handleConfig(AsyncWebServerRequest *request);
 void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleMeasurements(AsyncWebServerRequest *request);
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
 void setupMQTT();
 void sendMQTTCatWeights();
 bool writeMeasurement(CatMeasurement &m);
@@ -147,9 +149,15 @@ void setup()
   if (!LittleFS.begin(true))
   {
     Serial.println("An Error has occurred while mounting LittleFS");
+    display.println("FSErr");
+    display.display();
     while (true)
     {
-      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+      leds[0] = CRGB::Red;
+      FastLED.show();
+      delay(500);
+      leds[0] = CRGB::Black;
+      FastLED.show();
       delay(500);
     }
   }
@@ -183,6 +191,9 @@ void setup()
   // server.on("/api/config", HTTP_GET, handleConfig);
   server.on("/api/config", HTTP_POST, handleConfig, nullptr, handleConfigUpdate);
   server.on("/api/measurements", HTTP_GET, handleMeasurements);
+  // attach AsyncWebSocket
+  ws.onEvent(onEvent);
+  server.addHandler(&ws);
   server.begin();
 
   // setup time
@@ -190,60 +201,52 @@ void setup()
   display.display();
   configTime(0, 0, "pool.ntp.org");
 
-  // set MQTT
+  // setup MQTT
   setupMQTT();
+  // setup scale
+  setupScale();
 
   // setup OTA
-  // ArduinoOTA.setHostname("catscale");
-  // ArduinoOTA.setPassword("catscale");
+  ArduinoOTA.setHostname("weight-whiskers");
+  ArduinoOTA.setPassword("weight-whiskers");
 
-  // ArduinoOTA.onStart([]()
-  //                    {
-  //   Serial.println("Start");
-  //   display.clearDisplay();
-  //   display.setCursor(0, 20);
-  //   display.print("OTA Update...");
-  //   display.display(); });
-  // ArduinoOTA.onEnd([]()
-  //                  {
-  //   Serial.println("OTA Finished!");
-  //   display.clearDisplay();
-  //   display.setCursor(0, 20);
-  //   display.print("OTA Finished!");
-  //   display.display(); });
-  // ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-  //                       {
-  //   Serial.printf("Update:%u%%\r", (progress / (total / 100)));
-  //   display.clearDisplay();
-  //   display.setTextSize(2);
-  //   display.setCursor(0, 0);
-  //   display.printf("Update:%u%%", (progress / (total / 100)));
-  //   display.writeFillRect(0, display.height()-10, (display.width()/(float)total)*progress, display.height(), WHITE);
-  //   display.display(); });
+  ArduinoOTA.onStart([]()
+                     {
+    Serial.println("Start");
+    display.clearDisplay();
+    display.setCursor(0, 20);
+    display.print("OTA Update...");
+    display.display(); });
+  ArduinoOTA.onEnd([]()
+                   {
+    Serial.println("OTA Finished!");
+    display.clearDisplay();
+    display.setCursor(0, 20);
+    display.print("OTA Finished!");
+    display.display(); });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+                        {
+    Serial.printf("Update:%u%%\r", (progress / (total / 100)));
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setCursor(0, 0);
+    display.printf("Update:%u%%", (progress / (total / 100)));
+    display.writeFillRect(0, display.height()-10, (display.width()/(float)total)*progress, display.height(), WHITE);
+    display.display(); });
 
-  // ArduinoOTA.onError([](ota_error_t error)
-  //                    {
-  //   Serial.printf("Error[%u]: ", error);
-  //   display.clearDisplay();
-  //   display.setCursor(0, 20);
-  //   display.print("OTA Finished!");
-  //   display.display();
-  //   if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-  //   else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-  //   else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-  //   else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-  //   else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
-  // ArduinoOTA.begin();
-
-  // setup scale
-  display.print("Setup scale");
-  display.display();
-  // leds[0] = CRGB::Yellow;
-  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-  scale.set_scale(config.scale_calib_value); // set calibrated scale value from config
-  tare(10);
-  // leds[0] = CRGB::Green;
-  // FastLED.show();
+  ArduinoOTA.onError([](ota_error_t error)
+                     {
+    Serial.printf("Error[%u]: ", error);
+    display.clearDisplay();
+    display.setCursor(0, 20);
+    display.print("OTA Finished!");
+    display.display();
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
+  ArduinoOTA.begin();
 
   // uint32_t realSize = ESP.getFlashChipRealSize();
   // uint32_t ideSize = ESP.getFlashChipSize();
@@ -259,13 +262,15 @@ void setup()
   //                                                                   : ideMode == FM_DOUT ? "DOUT"
   //                                                                                        : "UNKNOWN"));
   Serial.println("Setup finished!");
-  delay(1000);
 }
 
 void loop()
 {
+  // clear ws clients
+  ws.cleanupClients();
+
   // over the air update
-  // ArduinoOTA.handle();
+  ArduinoOTA.handle();
 
   // MQTT
   mqtt.loop();
@@ -273,21 +278,14 @@ void loop()
   // button handling
   btn.update();
   // Serial.printf("Button state %d, changed %d, duration %d\n", btn.read(), btn.changed(), btn.currentDuration());
-  if (btn.changed())
+  auto deboucedInput = !btn.read();
+  if (deboucedInput && btn.currentDuration() > 1000)
   {
-    int deboucedInput = btn.read();
-    if (deboucedInput == HIGH)
-    {
-      if (btn.previousDuration() > 1000)
-      {
-        Serial.println("Calibrate...");
-        calibrate(500);
-      }
-      else
-      {
-        tare(10);
-      }
-    }
+    calibrate(config.scale_calib_weight);
+  }
+  else if (btn.rose() && btn.previousDuration() < 1000)
+  {
+    tare(10);
   }
 
   // measure weight
@@ -298,6 +296,18 @@ void loop()
     auto raw = scale.get_value();
     Serial.printf("Current measurement: %fg raw: %f\n", weight, raw);
     weightLowPass.input(weight);
+    if (current - scaleLastWSTimestamp > SCALE_WS_DELAY_MS)
+    {
+      for (auto &client : ws.getClients())
+      {
+        if (client->canSend())
+        {
+          Serial.printf("Send to client %d\n", client->id());
+          client->printf("{\"timestamp\": %lu, \"weight\": %f}", current, weightLowPass.output());
+        }
+      }
+      scaleLastWSTimestamp = current;
+    }
   }
   else
   {
@@ -388,6 +398,15 @@ void loop()
   FastLED.show();
 }
 
+void setupScale()
+{
+  display.print("Setup scale");
+  display.display();
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(config.scale_calib_value); // set calibrated scale value from config
+  tare(10);
+}
+
 void tare(int count = 10)
 {
   display.clearDisplay();
@@ -399,6 +418,8 @@ void tare(int count = 10)
 
 void calibrate(float weight)
 {
+  Serial.println("Calibrate...");
+
   // setup scale
   scale.set_scale();
   scale.tare();
@@ -409,17 +430,29 @@ void calibrate(float weight)
   display.printf("Place %.0fg\nand press\n", weight);
   display.display();
   Serial.printf("Place %.0fg\nand press\n", weight);
+  // wait for button release
+  while (!btn.rose())
+  {
+    btn.update();
+    delay(10);
+  }
   // wait for button press
   while (btn.read() != LOW)
   {
     btn.update();
     delay(10);
   }
-  while (btn.read() != HIGH)
+  while (!btn.rose())
   {
     btn.update();
     delay(10);
   }
+
+  // show state
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.printf("Calibrating...");
+  display.display();
 
   // measure and calculate scale
   float value = scale.get_units(10) / weight;
@@ -432,6 +465,7 @@ void calibrate(float weight)
 
   // show ok!
   display.clearDisplay();
+  display.setCursor(0, 0);
   display.printf("Ok!");
   display.display();
   Serial.printf("Calibrated!\n");
@@ -530,12 +564,98 @@ void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t le
 
     // Close the file
     file.close();
+
+    // load config and apply new settings
+    loadConfig();
+    applyConfig();
   }
 }
 
 void handleMeasurements(AsyncWebServerRequest *request)
 {
   request->send(LittleFS, measurementsFile, "text/csv");
+}
+
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len)
+{
+  if (type == WS_EVT_CONNECT)
+  {
+    // client connected
+    Serial.printf("ws[%s][%u] connect\n", server->url(), client->id());
+    // client->printf("{message: 'Hi!'}", client->id());
+    client->ping();
+  }
+  else if (type == WS_EVT_DISCONNECT)
+  {
+    // client disconnected
+    Serial.printf("ws[%s][%u] disconnect: %u\n", server->url(), client->id());
+  }
+  else if (type == WS_EVT_ERROR)
+  {
+    // error was received from the other end
+    Serial.printf("ws[%s][%u] error(%u): %s\n", server->url(), client->id(), *((uint16_t *)arg), (char *)data);
+  }
+  else if (type == WS_EVT_PONG)
+  {
+    // pong message was received (in response to a ping request maybe)
+    Serial.printf("ws[%s][%u] pong[%u]: %s\n", server->url(), client->id(), len, (len) ? (char *)data : "");
+  }
+  else if (type == WS_EVT_DATA)
+  {
+    Serial.println("Got WS data!");
+    // //data packet
+    // AwsFrameInfo * info = (AwsFrameInfo*)arg;
+    // if(info->final && info->index == 0 && info->len == len){
+    //   //the whole message is in a single frame and we got all of it's data
+    //   Serial.printf("ws[%s][%u] %s-message[%llu]: ", server->url(), client->id(), (info->opcode == WS_TEXT)?"text":"binary", info->len);
+    //   if(info->opcode == WS_TEXT){
+    //     data[len] = 0;
+    //     Serial.printf("%s\n", (char*)data);
+    //   } else {
+    //     for(size_t i=0; i < info->len; i++){
+    //       Serial.printf("%02x ", data[i]);
+    //     }
+    //     Serial.printf("\n");
+    //   }
+    //   if(info->opcode == WS_TEXT) {
+    //     Serial.println("Sending back text...");
+    //     // client->text("I got your text message");
+
+    //   } else {
+    //     Serial.println("Sending back binary text...");
+    //     // client->binary("I got your binary message");
+    //   }
+    // } else {
+    //   //message is comprised of multiple frames or the frame is split into multiple packets
+    //   if(info->index == 0){
+    //     if(info->num == 0)
+    //       Serial.printf("ws[%s][%u] %s-message start\n", server->url(), client->id(), (info->message_opcode == WS_TEXT)?"text":"binary");
+    //     Serial.printf("ws[%s][%u] frame[%u] start[%llu]\n", server->url(), client->id(), info->num, info->len);
+    //   }
+
+    //   Serial.printf("ws[%s][%u] frame[%u] %s[%llu - %llu]: ", server->url(), client->id(), info->num, (info->message_opcode == WS_TEXT)?"text":"binary", info->index, info->index + len);
+    //   if(info->message_opcode == WS_TEXT){
+    //     data[len] = 0;
+    //     Serial.printf("%s\n", (char*)data);
+    //   } else {
+    //     for(size_t i=0; i < len; i++){
+    //       Serial.printf("%02x ", data[i]);
+    //     }
+    //     Serial.printf("\n");
+    //   }
+
+    //   if((info->index + len) == info->len){
+    //     Serial.printf("ws[%s][%u] frame[%u] end[%llu]\n", server->url(), client->id(), info->num, info->len);
+    //     if(info->final){
+    //       Serial.printf("ws[%s][%u] %s-message end\n", server->url(), client->id(), (info->message_opcode == WS_TEXT)?"text":"binary");
+    //       // if(info->message_opcode == WS_TEXT)
+    //       //   client->text("I got your text message");
+    //       // else
+    //       //   client->binary("I got your binary message");
+    //     }
+    //   }
+    // }
+  }
 }
 
 bool loadConfig()
@@ -638,6 +758,12 @@ void printConfig()
   file.close();
 }
 
+void applyConfig()
+{
+  setupMQTT();
+  setupScale();
+}
+
 void setupMQTT()
 {
   mqtt.setServer(config.mqtt_server.c_str(), config.mqtt_port);
@@ -692,7 +818,7 @@ bool writeMeasurement(CatMeasurement &m)
     writeHeader = true;
   }
 
-  File f = LittleFS.open(measurementsFile, "a", true);
+  File f = LittleFS.open(measurementsFile, FILE_APPEND, true);
 
   if (!f)
   {
@@ -705,7 +831,7 @@ bool writeMeasurement(CatMeasurement &m)
     f.printf("time,weight,sigma,variance\n");
   }
 
-  f.printf("%g,%d,%.2f,%.2f\n", m.time, m.weight, m.sigma, m.variance);
+  f.printf("%ld,%hu,%.2f,%.2f\n", m.time, m.weight, m.sigma, m.variance);
   f.close();
 
   return true;
