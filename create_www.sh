@@ -1,6 +1,9 @@
 #!/bin/bash
 
-PROJECT_DIR="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+PROJECT_DIR="$(
+    cd "$(dirname "$0")" >/dev/null 2>&1
+    pwd -P
+)"
 cd $PROJECT_DIR
 echo "Project path: $PROJECT_DIR"
 
@@ -16,8 +19,9 @@ rm -r ${APP_WWW}/*
 mkdir -p ${APP_WWW}
 cp -r ${APP_BUILD}* ${APP_WWW}
 
-for f in `find ${APP_WWW}`
-do
-    echo $f
-    gzip -f $f
+for f in $(find ${APP_WWW}); do
+    if [ -f "${f}" ]; then
+        echo $f
+        gzip -f $f
+    fi
 done

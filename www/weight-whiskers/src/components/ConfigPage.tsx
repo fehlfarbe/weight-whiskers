@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Config } from "./Config";
-import { RJSFSchema } from '@rjsf/utils';
+import { RJSFSchema, RJSFValidationError } from '@rjsf/utils';
 import validator from '@rjsf/validator-ajv8';
 import Form, { IChangeEvent } from '@rjsf/core';
+import SystemInfoComponent from "./SystemInfo";
+import logo from '../logo.svg';
 
 const schema: RJSFSchema = {
   "title": "Config",
@@ -64,9 +66,13 @@ function request<TResponse>(
     .then((data) => data as TResponse);
 }
 
+class InfoMessage {
+  error: boolean = false;
+  message: string = "";
+}
+
 
 const ConfigPage = () => {
-  console.log("Render config page");
   const initConfig = {
     mqttServer: "",
     mqttPort: 0,
@@ -78,11 +84,18 @@ const ConfigPage = () => {
     scaleTareTime: 0,
     scaleTareThresh: 0
   }
-  // console.log("Render config page", {config: new Config()});
-  const [state, setState] = useState<Config>(initConfig);
 
-  // function onSubmit(data: z.infer<typeof ConfigSchema>) {
-  const onSubmit = ({formData} : IChangeEvent<any, RJSFSchema, any>, e: React.FormEvent) => {
+  const initInfo = {
+    error: false,
+    message: ""
+  }
+
+  // console.log("Render config page", {config: new Config()});
+  const [config, setConfig] = useState<Config>(initConfig);
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [info, setInfo] = useState<InfoMessage>(initInfo);
+
+  const onSubmit = ({ formData }: IChangeEvent<any, RJSFSchema, any>, e: React.FormEvent) => {
     // retrieve type-safe data when the form is submitted
     e.preventDefault();
     console.log("Update config", formData);
@@ -95,36 +108,66 @@ const ConfigPage = () => {
       body: JSON.stringify(formData),
     })
       .then((response) => {
-        // ...
+        let info = new InfoMessage();
+        if (response.status != 200) {
+          info.error = true;
+          info.message = "Cannot save config! " + response.status + " " + response.statusText;
+          setInfo(info);
+          console.log("Error");
+        } else {
+          info.error = false;
+          info.message = "Config saved!";
+          setInfo(info);
+          console.log("Saved");
+        }
       })
       .catch((error) => {
-        // ...
+        let info = new InfoMessage();
+        info.error = true;
+        info.message = "Cannot save config! " + error;
+        setInfo(info);
+        console.log("Error");
       })
+  }
+
+  const onError = (errors: RJSFValidationError[]) => {
+    console.log("Error saving config " + errors);
   }
 
   // load config
   useEffect(() => {
-    request<Config>('/api/config').then(config => {
-      console.log("Got config", config);
-      setState(config);
-      console.log("new state: ", state);
+    console.log("useEffect");
+    request<Config>('/api/config').then(cfg => {
+      setConfig(cfg);
+      setConfigLoaded(true);
     })
-  }, [])
+  }, [info, configLoaded])
 
-  console.log("Render with state: ", state);
   const log = (type: string) => console.log.bind(console, type);
 
   return (
     <>
       <h1>Config</h1>
-      <Form
-        schema={schema}
-        validator={validator}
-        onChange={log('changed')}
-        onSubmit={onSubmit}
-        onError={log('errors')}
-        formData={state}
-      />
+      {configLoaded
+        ? <Form
+          schema={schema}
+          validator={validator}
+          onChange={log('changed')}
+          onSubmit={onSubmit}
+          onError={onError}
+          formData={config}
+        />
+        : <img src={logo} className="App-loading" alt="loading" />
+      }
+      <div>
+        {info.message
+          ? <span className="toast secondary">{info.message}</span>
+          : <></>
+        }
+      </div>
+      <div>
+        <SystemInfoComponent></SystemInfoComponent>
+      </div>
     </>
   );
 }

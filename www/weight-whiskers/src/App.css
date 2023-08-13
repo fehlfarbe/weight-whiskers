@@ -8,17 +8,46 @@
   margin: 5px;
 }
 
+.App-loading {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: auto;
+  width: 30%;
+  max-width: 200px;
+  pointer-events: none;
+  margin: 15px auto;
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
+  .App-loading {
+    animation: App-loading-spin infinite 20s linear;
   }
 }
 
-@keyframes App-logo-spin {
+@keyframes App-loading-spin {
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
 }
+
+/* @media (prefers-reduced-motion: no-preference) {
+  .toast {
+    animation: toast-fade 5s ease-in;
+    animation-iteration-count: 1;
+  }
+}
+
+@keyframes toast-fade {
+  from {
+    opacity: 100%;
+  }
+
+  to {
+    opacity: 0%;
+  }
+} */

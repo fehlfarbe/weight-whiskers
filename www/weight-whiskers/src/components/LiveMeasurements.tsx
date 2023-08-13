@@ -1,8 +1,9 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState } from "react";
 import useWebSocket, { ReadyState } from 'react-use-websocket';
 import { Datum, ResponsiveLine, Serie } from '@nivo/line'
-import { RingBuffer } from 'ring-buffer-ts';
+import logo from '../logo.svg';
 
+// @todo: set relative path
 const WS_URL = 'ws://weight-whiskers.local/ws';
 
 
@@ -19,119 +20,75 @@ class Point implements Datum {
 class MeasurementData implements Serie {
   id: string = 'series';
   data: Array<Point> = [];
+  startTime: number = 0;
 }
 
 const LiveMeasurements = () => {
-  const [dataHistory, setDataHistory] = useState<Array<Serie>>([new MeasurementData()]);
+  const [dataHistory, setDataHistory] = useState<Array<MeasurementData>>([new MeasurementData()]);
   const { sendMessage, lastMessage, readyState } = useWebSocket(WS_URL, {
-    onOpen: () => console.log('opened'),
+    onOpen: () => {
+      console.log('opened');
+    },
     share: true
   });
 
   useEffect(() => {
     if (lastMessage !== null) {
-      console.log("lastMessage", lastMessage.data);
-      console.log("dataHistory length: ", dataHistory.length);
-      console.log("dataHistory series length: ", dataHistory[0].data.length);
       let data = JSON.parse(lastMessage.data);
+      if (dataHistory[0].startTime <= 0) {
+        dataHistory[0].startTime = data.timestamp;
+      }
       let p = new Point();
-      p.x = data.timestamp;
+      p.x = (data.timestamp - dataHistory[0].startTime) / 1000.;
       p.y = data.weight;
       dataHistory[0].data.push(p);
-      if(dataHistory[0].data.length > 100){
+      // delete old values (ringbuffer)
+      if (dataHistory[0].data.length > 100) {
         dataHistory[0].data.shift();
       }
       setDataHistory(dataHistory);
-      // dataHistory.data.push({x: data.timestamp, y: data.weight})
-      // setDataHistory(prev => prev.concat(data));
     }
-  }, [lastMessage, setDataHistory]);
-
-  const handleClickSendMessage = useCallback(() => sendMessage('Hello'), []);
-
-  const connectionStatus = {
-    [ReadyState.CONNECTING]: 'Connecting',
-    [ReadyState.OPEN]: 'Open',
-    [ReadyState.CLOSING]: 'Closing',
-    [ReadyState.CLOSED]: 'Closed',
-    [ReadyState.UNINSTANTIATED]: 'Uninstantiated',
-  }[readyState];
-
+  }, [lastMessage, dataHistory, setDataHistory]);
 
   return <>
     <div>
-      <h1>Measurements:</h1>
-      <span>The WebSocket is currently {connectionStatus}</span>
-      {lastMessage ? <span>Last message: {lastMessage.data}</span> : null}
-      <div style={{height: "500px"}}>
-        <ResponsiveLine
-          data={dataHistory}
-          margin={{ top: 50, right: 110, bottom: 50, left: 60 }}
-          xScale={{ type: 'point' }}
-          yScale={{
-            type: 'linear',
-            min: 'auto',
-            max: 'auto',
-            stacked: true,
-            reverse: false
-          }}
-          yFormat=" >-.2f"
-          axisTop={null}
-          axisRight={null}
-          axisBottom={{
-            tickSize: 5,
-            tickPadding: 5,
-            tickRotation: 0,
-            legend: 'transportation',
-            legendOffset: 36,
-            legendPosition: 'middle'
-          }}
-          axisLeft={{
-            tickSize: 5,
-            tickPadding: 5,
-            tickRotation: 0,
-            legend: 'weight in gram',
-            legendOffset: -40,
-            legendPosition: 'middle'
-          }}
-          pointSize={10}
-          pointColor={{ theme: 'background' }}
-          pointBorderWidth={2}
-          pointBorderColor={{ from: 'serieColor' }}
-          pointLabelYOffset={-12}
-          useMesh={true}
-          legends={[
-            {
-              anchor: 'bottom-right',
-              direction: 'column',
-              justify: false,
-              translateX: 100,
-              translateY: 0,
-              itemsSpacing: 0,
-              itemDirection: 'left-to-right',
-              itemWidth: 80,
-              itemHeight: 20,
-              itemOpacity: 0.75,
-              symbolSize: 12,
-              symbolShape: 'circle',
-              symbolBorderColor: 'rgba(0, 0, 0, .5)',
-              effects: [
-                {
-                  on: 'hover',
-                  style: {
-                    itemBackground: 'rgba(0, 0, 0, .03)',
-                    itemOpacity: 1
-                  }
-                }
-              ]
-            }
-          ]}
-        /></div>
-      <ul>
-        {/* {dataHistory.map((message, idx) => (
-          // <li key={idx}>{message ? message.timestamp : null} : {message ? message.weight : null}</li>
-        ))} */}
-      </ul>
+      <h1>Live data</h1>
+      {readyState != ReadyState.OPEN
+        ? <img src={logo} className="App-loading" alt="loading" />
+        : <div style={{ height: "500px" }}>
+          <ResponsiveLine
+            data={dataHistory}
+            margin={{ top: 5, right: 5, bottom: 60, left: 60 }}
+            yScale={{
+              type: 'linear',
+              min: 'auto',
+              max: 'auto',
+              stacked: true,
+              reverse: false
+            }}
+            yFormat=" >-d"
+            xFormat=".2f"
+            axisBottom={{
+              tickSize: 5,
+              tickPadding: 5,
+              tickRotation: -45,
+              legend: 'time in seconds since start',
+              legendOffset: 50,
+              legendPosition: 'middle',
+              format: '.2f',
+            }}
+            axisLeft={{
+              tickSize: 5,
+              tickPadding: 5,
+              tickRotation: 0,
+              legend: 'weight in gram',
+              legendOffset: -50,
+              legendPosition: 'middle',
+              format: '.2f'
+            }}
+            enablePoints={false}
+          /></div>
+      }
     </div>
   </>
 }
