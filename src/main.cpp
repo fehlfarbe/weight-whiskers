@@ -1,7 +1,5 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 #include <HX711.h>
 #include <LittleFS.h>
 #include <Bounce2.h>
@@ -17,6 +15,9 @@
 #include <ArduinoOTA.h>
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
+#include <melody_player.h>
+#include <melody_factory.h>
+#include "Display.h"
 
 // Button
 #define BUTTON 9
@@ -29,29 +30,30 @@
 // Display
 #define SDA 42
 #define SCL 41
+// #define SDA 34
+// #define SCL 33
+#define SSD1306_NO_SPLASH
+// Buzzer
+#define BUZZER 13
 // constants
 #define SCALE_DELAY_MS 100
-#define SCALE_WS_DELAY_MS 1000
+#define SCALE_WS_DELAY_MS 500
 #define BUFSIZE 55
-#define DISPLAY_TEXT_SIZE 4
 #define JSON_BUFFER 2048
 
-enum ScaleState
-{
-  EMPTY,
-  OCCUPIED
-};
-
-ScaleState state = EMPTY;
+using namespace weightwhiskers;
 
 // display
-Adafruit_SSD1306 display = Adafruit_SSD1306(128, 64, &Wire);
+Display display(&Wire);
 
 // buttons
 Bounce btn = Bounce();
 
 // LED
 CRGBArray<LED_NUM> leds;
+
+// buzzer
+MelodyPlayer buzzer(BUZZER);
 
 // scale
 HX711 scale;
@@ -65,11 +67,13 @@ struct CatMeasurement
   time_t time = 0;
   uint16_t weight = 0.;
   float sigma = 0.;
-  float variance = 0.;
+  float duration = 0.;
 };
 CatMeasurement measuredCatWeightsBuffer[20];
 int measuredCatWeightsCounter = 0;
+
 String measurementsFile = "/measurements.csv";
+String configFile = "/config.json";
 
 // Config
 struct Config
@@ -86,6 +90,8 @@ struct Config
   // scale tare triggers
   int scale_tare_time = 60000; // millis
   int scale_tare_thresh = 50;  // gram
+  // presence detection
+  float presence_time_min = 5.f;
 };
 
 Config config;
@@ -107,15 +113,17 @@ void listDir(fs::FS &fs, const char *dirname, uint8_t levels);
 void setupScale();
 void tare(int count);
 void calibrate(float weight);
-void displayWeight(float weight);
 void apCallback(AsyncWiFiManager *mgr);
 void handleConfig(AsyncWebServerRequest *request);
 void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+void handeMeasurementsUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleMeasurements(AsyncWebServerRequest *request);
+void handleSystem(AsyncWebServerRequest *request);
 void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
 void setupMQTT();
 void sendMQTTCatWeights();
 bool writeMeasurement(CatMeasurement &m);
+void playToneSuccess();
 
 void setup()
 {
@@ -124,33 +132,32 @@ void setup()
   Serial.begin(115200);
   Serial.println("Cat scale");
 
+  // setup pins
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
+  pinMode(BUZZER, OUTPUT);
+  digitalWrite(BUZZER, LOW);
+
+  // setup button
+  btn.attach(BUTTON, INPUT_PULLUP);
+  btn.interval(5);
 
   // display
   Wire.begin(SDA, SCL);
-  display.begin(SSD1306_EXTERNALVCC, 0x3C); // Address 0x3C for 128x32
-  display.display();
-  display.clearDisplay();
-  display.setTextSize(DISPLAY_TEXT_SIZE);
-  display.setTextColor(WHITE);
+  display.begin();
+  display.drawBootScreen();
 
   // LED
-  FastLED.addLeds<WS2812B, LED_EXTRA, RGB>(leds, LED_NUM);
+  FastLED.addLeds<NEOPIXEL, LED_EXTRA>(leds, LED_NUM);
   FastLED.setBrightness(50);
-  leds[0] = CRGB::Aqua;
+  leds[0] = CRGB::Yellow;
   FastLED.show();
-
-  // setup button button
-  btn.attach(BUTTON, INPUT_PULLUP);
-  btn.interval(5);
 
   // Filesystem and config
   if (!LittleFS.begin(true))
   {
     Serial.println("An Error has occurred while mounting LittleFS");
-    display.println("FSErr");
-    display.display();
+    display.drawError("FS Error");
     while (true)
     {
       leds[0] = CRGB::Red;
@@ -173,8 +180,7 @@ void setup()
 
   // Setup WiFi
   Serial.println("WiFi autoconnect...");
-  display.println("WiFi...");
-  display.display();
+  display.drawWiFi();
   wifiManager.setAPCallback(apCallback);
   if (!wifiManager.autoConnect("weight-whiskers"))
   {
@@ -186,19 +192,22 @@ void setup()
   Serial.println("Visit the config site at http://weight-whiskers.local");
 
   // Set up required URL handlers on the web server.
-  // server.on("/", HTTP_GET, handleRoot);
-  server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
-  // server.on("/api/config", HTTP_GET, handleConfig);
+  // static files, cached for 1 month
+  server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html").setCacheControl("max-age=2678400");
+  server.serveStatic("/config", LittleFS, "/www/index.html").setDefaultFile("index.html").setCacheControl("max-age=2678400");
+  server.serveStatic("/live", LittleFS, "/www/index.html").setDefaultFile("index.html").setCacheControl("max-age=2678400");
   server.on("/api/config", HTTP_POST, handleConfig, nullptr, handleConfigUpdate);
-  server.on("/api/measurements", HTTP_GET, handleMeasurements);
+  server.on("/api/measurements", HTTP_POST, handleMeasurements, nullptr, handeMeasurementsUpdate);
+  server.on("/api/raw", HTTP_GET, [](AsyncWebServerRequest *request)
+            { request->send(LittleFS, "/rawvalues.csv", "text/csv"); });
+  server.on("/api/system", HTTP_GET, handleSystem);
   // attach AsyncWebSocket
   ws.onEvent(onEvent);
   server.addHandler(&ws);
   server.begin();
 
   // setup time
-  display.println("NTP...");
-  display.display();
+  display.drawText("NTP...");
   configTime(0, 0, "pool.ntp.org");
 
   // setup MQTT
@@ -213,34 +222,20 @@ void setup()
   ArduinoOTA.onStart([]()
                      {
     Serial.println("Start");
-    display.clearDisplay();
-    display.setCursor(0, 20);
-    display.print("OTA Update...");
-    display.display(); });
+    display.drawOTA(0); });
   ArduinoOTA.onEnd([]()
                    {
     Serial.println("OTA Finished!");
-    display.clearDisplay();
-    display.setCursor(0, 20);
-    display.print("OTA Finished!");
-    display.display(); });
+    display.drawOTA(1.); });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
                         {
-    Serial.printf("Update:%u%%\r", (progress / (total / 100)));
-    display.clearDisplay();
-    display.setTextSize(2);
-    display.setCursor(0, 0);
-    display.printf("Update:%u%%", (progress / (total / 100)));
-    display.writeFillRect(0, display.height()-10, (display.width()/(float)total)*progress, display.height(), WHITE);
-    display.display(); });
-
+    float percentage = progress / (total / 100);
+    Serial.printf("Update:%u%%\r", percentage);
+    display.drawOTA(percentage); });
   ArduinoOTA.onError([](ota_error_t error)
                      {
     Serial.printf("Error[%u]: ", error);
-    display.clearDisplay();
-    display.setCursor(0, 20);
-    display.print("OTA Finished!");
-    display.display();
+    display.drawOTA(0);
     if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
     else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
     else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
@@ -248,19 +243,9 @@ void setup()
     else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
   ArduinoOTA.begin();
 
-  // uint32_t realSize = ESP.getFlashChipRealSize();
-  // uint32_t ideSize = ESP.getFlashChipSize();
-  // FlashMode_t ideMode = ESP.getFlashChipMode();
-
-  // Serial.printf("Flash real id:   %08X\n", ESP.getFlashChipId());
-  // Serial.printf("Flash real size: %u bytes\n\n", realSize);
-
-  // Serial.printf("Flash ide  size: %u bytes\n", ideSize);
-  // Serial.printf("Flash ide speed: %u Hz\n", ESP.getFlashChipSpeed());
-  // Serial.printf("Flash ide mode:  %s\n", (ideMode == FM_QIO ? "QIO" : ideMode == FM_QOUT ? "QOUT"
-  //                                                                   : ideMode == FM_DIO  ? "DIO"
-  //                                                                   : ideMode == FM_DOUT ? "DOUT"
-  //                                                                                        : "UNKNOWN"));
+  // success!
+  leds[0] = CRGB::Green;
+  FastLED.show();
   Serial.println("Setup finished!");
 }
 
@@ -298,14 +283,7 @@ void loop()
     weightLowPass.input(weight);
     if (current - scaleLastWSTimestamp > SCALE_WS_DELAY_MS)
     {
-      for (auto &client : ws.getClients())
-      {
-        if (client->canSend())
-        {
-          Serial.printf("Send to client %d\n", client->id());
-          client->printf("{\"timestamp\": %lu, \"weight\": %f}", current, weightLowPass.output());
-        }
-      }
+      ws.printfAll("{\"timestamp\": %lu, \"weight\": %f}", current, weightLowPass.output());
       scaleLastWSTimestamp = current;
     }
   }
@@ -317,57 +295,52 @@ void loop()
 
   if (current - scaleLastTimestamp > SCALE_DELAY_MS)
   {
-    // scaleLastTimestamp = millis();
-    // float weight = 0.f;
-
-    // if (scale.wait_ready_timeout(1000)) {
-    //   weight = scale.get_units(2);
-    // } else {
-    //   Serial.println("HX711 not found.");
-    //   return;
-    // }
-
-    if (weightLowPass.output() > config.scale_weight_min && state == EMPTY)
+    if (weightLowPass.output() > config.scale_weight_min)
     {
+      // debug: write values to file
+      File rawValues = LittleFS.open("/rawvalues.csv", FILE_WRITE);
+      rawValues.println("time,raw,mean,sigma");
       // cat sits on the throne
-      state = OCCUPIED;
       leds[0] = CRGB::Yellow;
       FastLED.show();
+      auto occupationStart = current;
       auto statistics = RunningStatistics();
-      statistics.setWindowSecs(30);
+      statistics.setWindowSecs(10);
       statistics.setInitialValue(weightLowPass.output());
       while (weightLowPass.output() > config.scale_weight_min)
       {
-        weightLowPass.input(scale.get_units(2));
-        statistics.input(weightLowPass.output());
-        displayWeight(weightLowPass.output());
+        auto value = scale.get_units(2);
+        weightLowPass.input(value);
+        statistics.input(value);
+        rawValues.printf("%lu,%.2f,%.2f,%.2f\n", millis(), value, statistics.mean(), statistics.sigma());
+        display.drawWeightScreen(weightLowPass.output());
         delay(10);
       }
-
+      rawValues.close();
       // cat left the throne
-      leds[0] = CRGB::Green;
-      FastLED.show();
-      CatMeasurement measurement;
-      time(&measurement.time); // Get current timestamp
-      measurement.weight = statistics.mean();
-      measurement.sigma = statistics.sigma();
-      measurement.variance = statistics.variance();
-      measuredCatWeightsBuffer[measuredCatWeightsCounter] = measurement; // save value to send via mqtt
-      measuredCatWeightsCounter++;
-      writeMeasurement(measurement);
-      displayWeight(statistics.mean());
-      delay(5000);
-
-      // reset state
-      state = EMPTY;
-      // weight = scale.get_units(2);
-      // displayWeight(weight);
+      auto duration = (millis() - occupationStart) / 1000.;
+      if (duration > config.presence_time_min)
+      {
+        leds[0] = CRGB::Green;
+        FastLED.show();
+        CatMeasurement measurement;
+        time(&measurement.time); // Get current timestamp
+        measurement.weight = statistics.mean();
+        measurement.sigma = statistics.sigma();
+        measurement.duration = duration;
+        measuredCatWeightsBuffer[measuredCatWeightsCounter] = measurement; // save value to send via mqtt
+        measuredCatWeightsCounter++;
+        writeMeasurement(measurement);
+        display.drawWeightScreen(statistics.mean());
+        playToneSuccess();
+        delay(5000);
+      }
       delay(1000);
       tare(10);
     }
 
     // write weight to display
-    displayWeight(weightLowPass.output());
+    display.drawWeightScreen(weightLowPass.output());
 
     // tare if necessary
     if (abs(weightLowPass.output()) < config.scale_tare_thresh)
@@ -400,8 +373,7 @@ void loop()
 
 void setupScale()
 {
-  display.print("Setup scale");
-  display.display();
+  display.drawText("Setup scale");
   scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
   scale.set_scale(config.scale_calib_value); // set calibrated scale value from config
   tare(10);
@@ -409,10 +381,7 @@ void setupScale()
 
 void tare(int count = 10)
 {
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.println("Tare...");
-  display.display();
+  display.drawTare();
   scale.tare(count);
 }
 
@@ -425,10 +394,7 @@ void calibrate(float weight)
   scale.tare();
 
   // place weight
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.printf("Place %.0fg\nand press\n", weight);
-  display.display();
+  display.drawCalib(weight);
   Serial.printf("Place %.0fg\nand press\n", weight);
   // wait for button release
   while (!btn.rose())
@@ -449,10 +415,7 @@ void calibrate(float weight)
   }
 
   // show state
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.printf("Calibrating...");
-  display.display();
+  display.drawText("Calibrating...");
 
   // measure and calculate scale
   float value = scale.get_units(10) / weight;
@@ -464,22 +427,9 @@ void calibrate(float weight)
   saveConfig();
 
   // show ok!
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.printf("Ok!");
-  display.display();
+  display.drawText("Calibrated!");
   Serial.printf("Calibrated!\n");
   delay(1000);
-}
-
-void displayWeight(float weight)
-{
-  // Serial.printf("Weight: %.2fg\n", weight);
-  display.clearDisplay();
-  display.setTextSize(4);
-  display.setCursor(0, 20);
-  display.printf("%.0fg", weight);
-  display.display();
 }
 
 void listDir(fs::FS &fs, const char *dirname, uint8_t levels)
@@ -524,14 +474,15 @@ void listDir(fs::FS &fs, const char *dirname, uint8_t levels)
 void apCallback(AsyncWiFiManager *mgr)
 {
   Serial.println("Started AP");
-  display.println("AP Mode");
-  display.display();
+  display.drawWiFiAPMode();
+  leds[0] = CRGB::Blue;
+  FastLED.show();
 }
 
 void handleConfig(AsyncWebServerRequest *request)
 {
   printConfig();
-  request->send(LittleFS, "/config.json", "application/json");
+  request->send(LittleFS, configFile, "application/json");
 }
 
 void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
@@ -552,7 +503,7 @@ void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t le
     }
 
     // open file
-    File file = LittleFS.open("/config.json", FILE_WRITE);
+    File file = LittleFS.open(configFile, FILE_WRITE);
 
     // Serialize JSON to file
     if (serializeJson(doc, file) == 0)
@@ -571,9 +522,46 @@ void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t le
   }
 }
 
+void handeMeasurementsUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+{
+  Serial.printf("Replace measurements file. CSV size: %d/%d bytes\n", len, total);
+  // open new file if index is zero, else append data
+  File file = LittleFS.open(measurementsFile, index == 0 ? FILE_WRITE : FILE_APPEND);
+
+  // write data
+  file.write(data, len);
+
+  // Close the file
+  file.close();
+}
+
 void handleMeasurements(AsyncWebServerRequest *request)
 {
   request->send(LittleFS, measurementsFile, "text/csv");
+}
+
+void handleSystem(AsyncWebServerRequest *request)
+{
+  StaticJsonDocument<512> doc;
+  auto flash = doc.createNestedObject("flash");
+  flash["total"] = LittleFS.totalBytes();
+  flash["used"] = LittleFS.usedBytes();
+  flash["config"] = LittleFS.open(configFile, FILE_READ).size();
+  flash["measurements"] = LittleFS.open(measurementsFile, FILE_READ).size();
+  auto wifi = doc.createNestedObject("wifi");
+  wifi["rssi"] = WiFi.RSSI();
+  auto system = doc.createNestedObject("system");
+  system["cpu"] = ESP.getChipModel();
+  system["freq"] = ESP.getCpuFreqMHz();
+  system["heapSize"] = ESP.getHeapSize();
+  system["heapFree"] = ESP.getFreeHeap();
+  system["heapMin"] = ESP.getMinFreeHeap();
+  system["heapMax"] = ESP.getMaxAllocHeap();
+
+  // create repsonse
+  AsyncResponseStream *response = request->beginResponseStream("application/json");
+  serializeJson(doc, *response);
+  request->send(response);
 }
 
 void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len)
@@ -603,64 +591,12 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
   else if (type == WS_EVT_DATA)
   {
     Serial.println("Got WS data!");
-    // //data packet
-    // AwsFrameInfo * info = (AwsFrameInfo*)arg;
-    // if(info->final && info->index == 0 && info->len == len){
-    //   //the whole message is in a single frame and we got all of it's data
-    //   Serial.printf("ws[%s][%u] %s-message[%llu]: ", server->url(), client->id(), (info->opcode == WS_TEXT)?"text":"binary", info->len);
-    //   if(info->opcode == WS_TEXT){
-    //     data[len] = 0;
-    //     Serial.printf("%s\n", (char*)data);
-    //   } else {
-    //     for(size_t i=0; i < info->len; i++){
-    //       Serial.printf("%02x ", data[i]);
-    //     }
-    //     Serial.printf("\n");
-    //   }
-    //   if(info->opcode == WS_TEXT) {
-    //     Serial.println("Sending back text...");
-    //     // client->text("I got your text message");
-
-    //   } else {
-    //     Serial.println("Sending back binary text...");
-    //     // client->binary("I got your binary message");
-    //   }
-    // } else {
-    //   //message is comprised of multiple frames or the frame is split into multiple packets
-    //   if(info->index == 0){
-    //     if(info->num == 0)
-    //       Serial.printf("ws[%s][%u] %s-message start\n", server->url(), client->id(), (info->message_opcode == WS_TEXT)?"text":"binary");
-    //     Serial.printf("ws[%s][%u] frame[%u] start[%llu]\n", server->url(), client->id(), info->num, info->len);
-    //   }
-
-    //   Serial.printf("ws[%s][%u] frame[%u] %s[%llu - %llu]: ", server->url(), client->id(), info->num, (info->message_opcode == WS_TEXT)?"text":"binary", info->index, info->index + len);
-    //   if(info->message_opcode == WS_TEXT){
-    //     data[len] = 0;
-    //     Serial.printf("%s\n", (char*)data);
-    //   } else {
-    //     for(size_t i=0; i < len; i++){
-    //       Serial.printf("%02x ", data[i]);
-    //     }
-    //     Serial.printf("\n");
-    //   }
-
-    //   if((info->index + len) == info->len){
-    //     Serial.printf("ws[%s][%u] frame[%u] end[%llu]\n", server->url(), client->id(), info->num, info->len);
-    //     if(info->final){
-    //       Serial.printf("ws[%s][%u] %s-message end\n", server->url(), client->id(), (info->message_opcode == WS_TEXT)?"text":"binary");
-    //       // if(info->message_opcode == WS_TEXT)
-    //       //   client->text("I got your text message");
-    //       // else
-    //       //   client->binary("I got your binary message");
-    //     }
-    //   }
-    // }
   }
 }
 
 bool loadConfig()
 {
-  File file = LittleFS.open("/config.json", "r");
+  File file = LittleFS.open(configFile, FILE_READ);
 
   if (!file)
   {
@@ -700,7 +636,7 @@ bool loadConfig()
 bool saveConfig()
 {
   // Open file for writing
-  File file = LittleFS.open("/config.json", "w");
+  File file = LittleFS.open(configFile, FILE_WRITE);
   if (!file)
   {
     Serial.println(F("Failed to create file"));
@@ -740,7 +676,7 @@ bool saveConfig()
 void printConfig()
 {
   // Open file for reading
-  File file = LittleFS.open("/config.json", "r");
+  File file = LittleFS.open(configFile, FILE_READ);
   if (!file)
   {
     Serial.println(F("Failed to read file"));
@@ -796,7 +732,7 @@ void sendMQTTCatWeights()
       }
 
       // send MQTT
-      String msg = "sensors,device=cat_scale,field=cat_weight value=" + String(measuredCatWeightsBuffer[i].weight) + ",sigma=" + String(measuredCatWeightsBuffer[i].sigma) + ",variance=" + String(measuredCatWeightsBuffer[i].variance);
+      String msg = "sensors,device=cat_scale,field=cat_weight value=" + String(measuredCatWeightsBuffer[i].weight) + ",sigma=" + String(measuredCatWeightsBuffer[i].sigma) + ",duration=" + String(measuredCatWeightsBuffer[i].duration);
       Serial.printf("Send MQTT message on topic %s: %s\n", config.mqtt_topic_cat_weight.c_str(), msg.c_str());
       mqtt.publish(config.mqtt_topic_cat_weight.c_str(), msg.c_str());
     }
@@ -828,11 +764,18 @@ bool writeMeasurement(CatMeasurement &m)
 
   if (writeHeader)
   {
-    f.printf("time,weight,sigma,variance\n");
+    f.printf("time,weight,sigma,duration\n");
   }
 
-  f.printf("%ld,%hu,%.2f,%.2f\n", m.time, m.weight, m.sigma, m.variance);
+  f.printf("%ld,%hu,%.2f,%.2f\n", m.time, m.weight, m.sigma, m.duration);
   f.close();
 
   return true;
+}
+
+void playToneSuccess()
+{
+  String notes1[] = {"C4", "G3", "G3", "A3", "G3", "SILENCE", "B3", "C4"};
+  Melody melody1 = MelodyFactory.load("Nice Melody", 250, notes1, 8);
+  buzzer.playAsync(melody1);
 }

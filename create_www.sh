@@ -21,7 +21,10 @@ cp -r ${APP_BUILD}* ${APP_WWW}
 
 for f in $(find ${APP_WWW}); do
     if [ -f "${f}" ]; then
-        echo $f
-        gzip -f $f
+        # echo $f
+        # brotli has better compression but needs patched webserver and up to date browser
+        # brotli -fj $f
+        gzip -9 -f $f
+        # du -h ${f}.br
     fi
 done
