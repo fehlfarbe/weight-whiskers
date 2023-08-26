@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { ChangeEvent, useEffect, useState } from "react";
 import { Datum, ResponsiveLine, Serie } from '@nivo/line'
-import logo from '../logo.svg';
 import Papa from "papaparse";
+import { LoadingImage } from "./Loading";
 
 export interface Measurement {
   timestamp: number;
@@ -16,8 +16,10 @@ export interface MeasurementCSV {
 }
 
 class Point implements Datum {
+  id: number = 0;
   x: string = "";
   y: number = 0;
+  selected: boolean = false;
 }
 
 class MeasurementData implements Serie {
@@ -28,6 +30,14 @@ class MeasurementData implements Serie {
 const MeasurementHistory = () => {
   const [dataHistory, setDataHistory] = useState<Array<MeasurementData>>([new MeasurementData()]);
   const commonConfig = { delimiter: ",", dynamicTyping: true };
+
+  // on check table element
+  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
+    console.log("onChange ", event.target.value);
+    dataHistory[0].data[parseInt(event.target.value)].selected = !dataHistory[0].data[parseInt(event.target.value)].selected;
+    setDataHistory(dataHistory);
+    console.log(dataHistory[0].data[parseInt(event.target.value)].selected);
+  }
 
   // load config
   useEffect(() => {
@@ -40,11 +50,13 @@ const MeasurementHistory = () => {
         complete: (result: Papa.ParseResult<MeasurementCSV>) => {
           let measurementData = new MeasurementData();
           measurementData.id = "Measured weight";
-          result.data.forEach(m => {
+          result.data.forEach((m, idx) => {
             if (m.time > 0) {
               measurementData.data.push({
+                id: idx,
                 x: new Date(m.time * 1000).toLocaleString(),
-                y: m.weight
+                y: m.weight,
+                selected: false
               })
             }
           });
@@ -58,7 +70,7 @@ const MeasurementHistory = () => {
   return <>
     <div>
       <h1>Measurements</h1>
-      {dataHistory[0].data.length == 0 ? <img src={logo} className="App-loading" alt="loading" /> : null}
+      {dataHistory[0].data.length == 0 ? <LoadingImage></LoadingImage> : null}
       <div style={{ height: "500px" }}>
         <ResponsiveLine
           data={dataHistory}
@@ -96,23 +108,26 @@ const MeasurementHistory = () => {
         useMesh={true}
         /></div>
       <div>
-        <table>
+        <table className="hoverable">
           <caption>Measurements</caption>
           <thead>
             <tr>
+              <th style={{width: "20px"}}></th>
               <th>Date</th>
               <th>Weight (g)</th>
             </tr>
           </thead>
           <tbody>
-            {dataHistory[0].data.map((message, idx) => (
-              <tr>
-                <td data-label="Date">{message ? message.x : null}</td>
-                <td data-label="Weight">{message ? message.y : null}</td>
+            {dataHistory[0].data.map((row, idx) => (
+              <tr key={row.id}>
+                <td data-label="Select"><input type="checkbox" value={row.id} checked={row.selected} onChange={handleChange}/></td>
+                <td data-label="Date">{row.x}</td>
+                <td data-label="Weight">{row.y}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        <button>Delete selected</button>
       </div>
       <div>
 

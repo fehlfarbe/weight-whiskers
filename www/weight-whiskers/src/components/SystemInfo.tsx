@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import logo from '../logo.svg';
+import { LoadingImage } from "./Loading";
 
 export interface SystemStateFlash {
   total: number | undefined;
@@ -12,9 +12,19 @@ export interface SystemStateWifi {
   rssi: number | undefined;
 }
 
+export interface SystemStateSystem {
+  cpu: string | undefined;
+  freq: number | undefined;
+  heapSize: number | undefined;
+  heapFree: number | undefined;
+  heapMin: number | undefined;
+  heapMax: number | undefined;
+}
+
 export interface SystemState {
   flash: SystemStateFlash | undefined;
   wifi: SystemStateWifi | undefined;
+  system: SystemStateSystem | undefined;
 }
 
 
@@ -37,7 +47,8 @@ function request<TResponse>(
 const SystemInfoComponent = () => {
   const initState = {
     flash: undefined,
-    wifi: undefined
+    wifi: undefined,
+    system: undefined
   };
 
   const [state, setState] = useState<SystemState>(initState);
@@ -56,17 +67,29 @@ const SystemInfoComponent = () => {
       <div>
         <h1>System info</h1>
         {state.flash === undefined
-          ? <img src={logo} className="App-loading" alt="loading" />
+          ? <LoadingImage></LoadingImage>
           : <><div>
             <h2>Disk usage</h2>
-            <span>System disk usage {state.flash?.used}/{state.flash?.total} bytes</span>
-            <progress value={state.flash?.used} max={state.flash?.total} className="primary"></progress>
-            <div>Config file size: {state.flash?.config} bytes</div>
-            <div>Measurements file size: {state.flash?.measurements} bytes</div>
+            <ul>
+              <li>System disk usage {state.flash?.used}/{state.flash?.total} bytes
+                <progress value={state.flash?.used} max={state.flash?.total} className="primary"></progress>
+              </li>
+              <li>Config file size: {state.flash?.config} bytes</li>
+              <li>Measurements file size: {state.flash?.measurements} bytes</li>
+            </ul>
           </div>
             <div>
               <h2>WiFi</h2>
               <span>WiFi RSSI: {state.wifi?.rssi} dB</span>
+            </div>
+            <div>
+              <h2>System</h2>
+              <ul>
+                <li>CPU: {state.system?.cpu} @ {state.system?.freq} MHz</li>
+                <li>Heap {(state.system?.heapSize ?? 0) - (state.system?.heapFree ?? 0)}/{state.system?.heapSize} bytes
+                  <progress value={(state.system?.heapSize ?? 0) - (state.system?.heapFree ?? 0)} max={state.system?.heapSize} className="primary"></progress>
+                </li>
+              </ul>
             </div>
           </>
         }

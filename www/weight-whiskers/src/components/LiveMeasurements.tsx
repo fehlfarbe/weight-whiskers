@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import useWebSocket, { ReadyState } from 'react-use-websocket';
 import { Datum, ResponsiveLine, Serie } from '@nivo/line'
-import logo from '../logo.svg';
+import { LoadingImage } from "./Loading";
 
 // @todo: set relative path
 const WS_URL = 'ws://weight-whiskers.local/ws';
@@ -54,7 +54,7 @@ const LiveMeasurements = () => {
     <div>
       <h1>Live data</h1>
       {readyState != ReadyState.OPEN
-        ? <img src={logo} className="App-loading" alt="loading" />
+        ? <LoadingImage></LoadingImage>
         : <div style={{ height: "500px" }}>
           <ResponsiveLine
             data={dataHistory}

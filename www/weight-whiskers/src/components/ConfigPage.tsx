@@ -4,7 +4,7 @@ import { RJSFSchema, RJSFValidationError } from '@rjsf/utils';
 import validator from '@rjsf/validator-ajv8';
 import Form, { IChangeEvent } from '@rjsf/core';
 import SystemInfoComponent from "./SystemInfo";
-import logo from '../logo.svg';
+import { LoadingImage } from "./Loading";
 
 const schema: RJSFSchema = {
   "title": "Config",
@@ -157,7 +157,7 @@ const ConfigPage = () => {
           onError={onError}
           formData={config}
         />
-        : <img src={logo} className="App-loading" alt="loading" />
+        : <LoadingImage></LoadingImage>
       }
       <div>
         {info.message
