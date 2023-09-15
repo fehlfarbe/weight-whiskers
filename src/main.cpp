@@ -3,6 +3,7 @@
 #include <HX711.h>
 #include <LittleFS.h>
 #include <Bounce2.h>
+#include <AiEsp32RotaryEncoder.h>
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <WebServer.h>
@@ -20,7 +21,9 @@
 #include "Display.h"
 
 // Button
-#define BUTTON 9
+#define ENCODER_BTN 9
+#define ENCODER_A 7
+#define ENCODER_B 8
 // LED
 #define LED_EXTRA 6
 #define LED_NUM 1
@@ -34,7 +37,7 @@
 // #define SCL 33
 #define SSD1306_NO_SPLASH
 // Buzzer
-#define BUZZER 13
+#define BUZZER 45
 // constants
 #define SCALE_DELAY_MS 100
 #define SCALE_WS_DELAY_MS 500
@@ -47,13 +50,13 @@ using namespace weightwhiskers;
 Display display(&Wire);
 
 // buttons
-Bounce btn = Bounce();
+AiEsp32RotaryEncoder encoder(ENCODER_B, ENCODER_A, ENCODER_BTN, -1, 4);
 
 // LED
 CRGBArray<LED_NUM> leds;
 
 // buzzer
-MelodyPlayer buzzer(BUZZER);
+MelodyPlayer buzzer(BUZZER, 0, LOW);
 
 // scale
 HX711 scale;
@@ -112,7 +115,7 @@ void applyConfig();
 void listDir(fs::FS &fs, const char *dirname, uint8_t levels);
 void setupScale();
 void tare(int count);
-void calibrate(float weight);
+void calibrate(long weight);
 void apCallback(AsyncWiFiManager *mgr);
 void handleConfig(AsyncWebServerRequest *request);
 void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
@@ -123,7 +126,13 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
 void setupMQTT();
 void sendMQTTCatWeights();
 bool writeMeasurement(CatMeasurement &m);
+void playToneStart();
 void playToneSuccess();
+
+void IRAM_ATTR readEncoderISR()
+{
+  encoder.readEncoder_ISR();
+}
 
 void setup()
 {
@@ -133,14 +142,13 @@ void setup()
   Serial.println("Cat scale");
 
   // setup pins
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH);
   pinMode(BUZZER, OUTPUT);
   digitalWrite(BUZZER, LOW);
 
-  // setup button
-  btn.attach(BUTTON, INPUT_PULLUP);
-  btn.interval(5);
+  // setup encoder
+  encoder.begin();
+  encoder.setup(readEncoderISR);
+  encoder.disableAcceleration();
 
   // display
   Wire.begin(SDA, SCL);
@@ -152,6 +160,9 @@ void setup()
   FastLED.setBrightness(50);
   leds[0] = CRGB::Yellow;
   FastLED.show();
+
+  // start sound
+  playToneStart();
 
   // Filesystem and config
   if (!LittleFS.begin(true))
@@ -168,7 +179,6 @@ void setup()
       delay(500);
     }
   }
-  delay(5000);
 
   // load config or create config file with default values if not existing
   listDir(LittleFS, "/", 4);
@@ -261,16 +271,21 @@ void loop()
   mqtt.loop();
 
   // button handling
-  btn.update();
-  // Serial.printf("Button state %d, changed %d, duration %d\n", btn.read(), btn.changed(), btn.currentDuration());
-  auto deboucedInput = !btn.read();
-  if (deboucedInput && btn.currentDuration() > 1000)
-  {
-    calibrate(config.scale_calib_weight);
-  }
-  else if (btn.rose() && btn.previousDuration() < 1000)
+  if (encoder.isEncoderButtonClicked())
   {
     tare(10);
+  }
+  else
+  {
+    auto beforeDown = millis();
+    while (encoder.isEncoderButtonDown())
+    {
+      auto now = millis();
+      if ((now - beforeDown) > 1000)
+      {
+        calibrate(config.scale_calib_weight);
+      }
+    }
   }
 
   // measure weight
@@ -385,7 +400,7 @@ void tare(int count = 10)
   scale.tare(count);
 }
 
-void calibrate(float weight)
+void calibrate(long weight)
 {
   Serial.println("Calibrate...");
 
@@ -395,24 +410,29 @@ void calibrate(float weight)
 
   // place weight
   display.drawCalib(weight);
-  Serial.printf("Place %.0fg\nand press\n", weight);
+  Serial.printf("Place %ld and press\n", weight);
   // wait for button release
-  while (!btn.rose())
+  while (encoder.isEncoderButtonDown())
   {
-    btn.update();
     delay(10);
   }
   // wait for button press
-  while (btn.read() != LOW)
+  encoder.reset();
+  long difference = 0;
+  while (!encoder.isEncoderButtonDown())
   {
-    btn.update();
+    difference = encoder.readEncoder();
+    Serial.printf("Difference %ld %d\n", difference, encoder.encoderChanged());
+    display.drawCalib(weight + difference);
+    Serial.printf("Place %ld and press\n", weight + difference);
+  }
+  Serial.println("clicked");
+  encoder.reset();
+  while (encoder.isEncoderButtonDown())
+  {
     delay(10);
   }
-  while (!btn.rose())
-  {
-    btn.update();
-    delay(10);
-  }
+  weight += difference;
 
   // show state
   display.drawText("Calibrating...");
@@ -771,6 +791,13 @@ bool writeMeasurement(CatMeasurement &m)
   f.close();
 
   return true;
+}
+
+void playToneStart()
+{
+  String notes1[] = {"C3", "G3", "C4"};
+  Melody melody1 = MelodyFactory.load("Start Melody", 250, notes1, 3);
+  buzzer.playAsync(melody1);
 }
 
 void playToneSuccess()

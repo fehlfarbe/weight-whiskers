@@ -80,14 +80,14 @@ namespace weightwhiskers
     void Display::drawCalib(int weight)
     {
         display.clearDisplay();
-        display.setTextSize(DISPLAY_TEXT_SIZE);
+        display.setTextSize(2);
         display.setTextColor(WHITE);
         display.setCursor(0, 0);
-        display.printf("Place %.0fg\nand press\n", weight);
+        display.printf("Place %dg\nand press button\n", weight);
         display.display();
     }
 
-    void Display::drawWeightScreen(float weight)
+    void Display::drawWeightScreen(float weight, float lastWeight)
     {
         display.clearDisplay();
         display.setTextSize(DISPLAY_TEXT_SIZE);
@@ -95,6 +95,15 @@ namespace weightwhiskers
         // draw weight
         display.setCursor(0, 10);
         display.printf("%.0fg", weight);
+
+        // draw last measured weight
+        if (lastWeight)
+        {
+            display.setTextSize(1);
+            display.setTextColor(WHITE);
+            display.setCursor(0, display.height() - 10);
+            display.printf("Last: %.0fg", lastWeight);
+        }
         // draw WiFi signal strength bars
         auto rssi = WiFi.RSSI();
         // display.setTextSize(1);

@@ -9,7 +9,9 @@
 hardware/~*
 hardware/gerbers
 hardware/stencil
+hardware/cat_scale_footprints
 data
+www/weight-whiskers/public/api/*
 
 # Prerequisites
 *.d
