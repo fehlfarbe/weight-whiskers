@@ -50,7 +50,7 @@ using namespace weightwhiskers;
 Display display(&Wire);
 
 // buttons
-AiEsp32RotaryEncoder encoder(ENCODER_B, ENCODER_A, ENCODER_BTN, -1, 4);
+AiEsp32RotaryEncoder encoder(ENCODER_B, ENCODER_A, ENCODER_BTN, -1, 4, true);
 
 // LED
 CRGBArray<LED_NUM> leds;
