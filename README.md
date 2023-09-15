@@ -8,5 +8,9 @@ A ESP32 based smart scale that tracks my cat's weight and sends data via MQTT to
 
 # PCB
 
-![PCB top](doc/pcb_front.jpg "PCB front")
-![PCB bottom](doc/pcb_back.jpg "PCB back")
+![PCB render front](doc/pcb_front.jpg "PCB render front")
+![PCB render back](doc/pcb_back.jpg "PCB render back")
+
+![PCB front](doc/2023-09-09_2023-09-09_0022_01.jpg "PCB front")
+![PCB back](doc/2023-09-09_2023-09-09_0029_01.jpg "PCB back")
+
