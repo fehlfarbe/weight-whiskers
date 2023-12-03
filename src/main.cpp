@@ -119,7 +119,7 @@ void calibrate(long weight);
 void apCallback(AsyncWiFiManager *mgr);
 void handleConfig(AsyncWebServerRequest *request);
 void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
-void handeMeasurementsUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+void handeMeasurementsUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
 void handleMeasurements(AsyncWebServerRequest *request);
 void handleSystem(AsyncWebServerRequest *request);
 void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
@@ -207,7 +207,7 @@ void setup()
   server.serveStatic("/config", LittleFS, "/www/index.html").setDefaultFile("index.html").setCacheControl("max-age=2678400");
   server.serveStatic("/live", LittleFS, "/www/index.html").setDefaultFile("index.html").setCacheControl("max-age=2678400");
   server.on("/api/config", HTTP_POST, handleConfig, nullptr, handleConfigUpdate);
-  server.on("/api/measurements", HTTP_POST, handleMeasurements, nullptr, handeMeasurementsUpdate);
+  server.on("/api/measurements", HTTP_POST, handleMeasurements, handeMeasurementsUpload);
   server.on("/api/raw", HTTP_GET, [](AsyncWebServerRequest *request)
             { request->send(LittleFS, "/rawvalues.csv", "text/csv"); });
   server.on("/api/system", HTTP_GET, handleSystem);
@@ -542,9 +542,9 @@ void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t le
   }
 }
 
-void handeMeasurementsUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+void handeMeasurementsUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final)
 {
-  Serial.printf("Replace measurements file. CSV size: %d/%d bytes\n", len, total);
+  Serial.printf("Replace measurements file. CSV size: %d bytes\n", len);
   // open new file if index is zero, else append data
   File file = LittleFS.open(measurementsFile, index == 0 ? FILE_WRITE : FILE_APPEND);
 
@@ -557,6 +557,11 @@ void handeMeasurementsUpdate(AsyncWebServerRequest *request, uint8_t *data, size
 
 void handleMeasurements(AsyncWebServerRequest *request)
 {
+  if(request->getParam(0) && request->getParam(0)->isFile()){
+    // file upload successful!
+    request->redirect("/");
+    return;
+  }
   request->send(LittleFS, measurementsFile, "text/csv");
 }
 
