@@ -1,4 +1,4 @@
-import React, { ChangeEvent, useEffect, useState } from "react";
+import React, { ChangeEvent, MouseEventHandler, useEffect, useState } from "react";
 import { Datum, ResponsiveLine, Serie } from '@nivo/line'
 import Papa from "papaparse";
 import { LoadingImage } from "./Loading";
@@ -17,6 +17,7 @@ export interface MeasurementCSV {
 
 class Point implements Datum {
   id: number = 0;
+  timestamp: number = 0;
   x: string = "";
   y: number = 0;
   selected: boolean = false;
@@ -31,12 +32,52 @@ const MeasurementHistory = () => {
   const [dataHistory, setDataHistory] = useState<Array<MeasurementData>>([new MeasurementData()]);
   const commonConfig = { delimiter: ",", dynamicTyping: true };
 
-  // on check table element
-  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
-    console.log("onChange ", event.target.value);
-    dataHistory[0].data[parseInt(event.target.value)].selected = !dataHistory[0].data[parseInt(event.target.value)].selected;
-    setDataHistory(dataHistory);
-    console.log(dataHistory[0].data[parseInt(event.target.value)].selected);
+  // on click table element
+  const selectPoint = (event: React.MouseEvent<HTMLTableRowElement>, id: number) => {
+    event.preventDefault();
+    var history = dataHistory[0];
+    var idx = history.data.findIndex(item => item.id == id);
+    history.data[idx].selected = !history.data[idx].selected;
+    setDataHistory([
+      { ...history, data: history.data }
+    ]
+    );
+    console.log(dataHistory);
+  }
+
+  // send delete request to delete selected elements identified by timestamp
+  const deleteSelectedPoints = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    var pointsToDelete = dataHistory[0].data.filter(d => d.selected);
+    var deletePayload = {
+      action: "delete",
+      timestamps: pointsToDelete.map(point => point.timestamp)
+    };
+
+    fetch("/api/measurements", {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: JSON.stringify(deletePayload),
+
+    })
+      .then((response) => {
+        console.log(response.status);
+        if (response.status == 200) {
+          setDataHistory([
+            {
+              ...dataHistory[0],
+              data: dataHistory[0].data.filter(d => !d.selected)
+            }
+          ]
+          );
+        }
+      })
+      .catch((error) => {
+        console.log("Error");
+      });
   }
 
   // load config
@@ -54,6 +95,7 @@ const MeasurementHistory = () => {
             if (m.time > 0) {
               measurementData.data.push({
                 id: idx,
+                timestamp: m.time,
                 x: new Date(m.time * 1000).toLocaleString(),
                 y: m.weight,
                 selected: false
@@ -104,30 +146,30 @@ const MeasurementHistory = () => {
           pointSize={10}
           pointBorderWidth={2}
           pointBorderColor={{ from: 'serieColor' }}
-        // pointLabelYOffset={-12}
-        useMesh={true}
+          // pointLabelYOffset={-12}
+          useMesh={true}
         /></div>
       <div>
         <table className="hoverable">
           <caption>Measurements</caption>
           <thead>
             <tr>
-              <th style={{width: "20px"}}></th>
+              <th style={{ width: "20px" }}></th>
               <th>Date</th>
               <th>Weight (g)</th>
             </tr>
           </thead>
           <tbody>
             {dataHistory[0].data.map((row, idx) => (
-              <tr key={row.id}>
-                <td data-label="Select"><input type="checkbox" value={row.id} checked={row.selected} onChange={handleChange}/></td>
+              <tr key={row.id} onClick={e => selectPoint(e, row.id)}>
+                <td data-label="Select"><input type="checkbox" value={row.id} checked={row.selected} readOnly={true} /></td>
                 <td data-label="Date">{row.x}</td>
-                <td data-label="Weight">{row.y}</td>
+                <td data-label="Weight">{row.y} {row.selected}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <button>Delete selected</button>
+        <button onClick={deleteSelectedPoints}>Delete selected</button>
       </div>
       <div>
 

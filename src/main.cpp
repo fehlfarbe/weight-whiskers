@@ -557,11 +557,78 @@ void handeMeasurementsUpload(AsyncWebServerRequest *request, String filename, si
 
 void handleMeasurements(AsyncWebServerRequest *request)
 {
-  if(request->getParam(0) && request->getParam(0)->isFile()){
+  Serial.printf("Handle measurement method %s\n", request->methodToString());
+
+  for (size_t i = 0; i < request->params(); i++)
+  {
+    Serial.printf("%s: %s\n", request->getParam(i)->name().c_str(), request->getParam(i)->value().c_str());
+  }
+
+  if (request->getParam("measurements", true, true))
+  {
+    Serial.println("Upload successful");
     // file upload successful!
     request->redirect("/");
     return;
   }
+
+  auto body = request->getParam("body", true);
+  if (body != nullptr)
+  {
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, body->value());
+    JsonObject obj = doc.as<JsonObject>();
+    String action = obj["action"];
+
+    if (action == "delete")
+    {
+      // Serial.println("deleting...");
+      auto tmpMeasurementsFile = measurementsFile + "_tmp";
+      auto oldFile = LittleFS.open(measurementsFile, FILE_READ);
+      auto newFile = LittleFS.open(tmpMeasurementsFile, FILE_WRITE);
+
+      // read old file and write lines to new file that are not deleted list elements
+      auto line = oldFile.readStringUntil('\n');
+      while (line.length())
+      {
+        // get timestamp from line
+        int index = line.indexOf(',');
+        auto timestamp = line.substring(0, index).toInt();
+        // check if first element/timestamp is in deleted list
+        bool skip = false;
+        for (long ts : obj["timestamps"].as<JsonArray>())
+        {
+          // Serial.printf("timestamp %d\n", ts.as<uint32_t>());
+          if (timestamp == ts)
+          {
+            // Serial.printf("Deleting %d == %d\n", timestamp, ts);
+            skip = true;
+            break;
+          }
+        }
+        // write line to new/tmp file
+        if (!skip)
+        {
+          line.trim();
+          // Serial.printf("Writing line: %s\n", line.c_str());
+          newFile.println(line);
+        }
+        // read new line
+        line = oldFile.readStringUntil('\n');
+      }
+
+      // close files
+      oldFile.close();
+      newFile.close();
+
+      // replace with new measurements file
+      LittleFS.remove(measurementsFile);
+      LittleFS.rename(tmpMeasurementsFile, measurementsFile);
+
+      request->send(200);
+    }
+  }
+
   request->send(LittleFS, measurementsFile, "text/csv");
 }
 
