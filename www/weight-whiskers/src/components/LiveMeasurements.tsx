@@ -3,8 +3,7 @@ import useWebSocket, { ReadyState } from 'react-use-websocket';
 import { Datum, ResponsiveLine, Serie } from '@nivo/line'
 import { LoadingImage } from "./Loading";
 
-// @todo: set relative path
-const WS_URL = 'ws://weight-whiskers.local/ws';
+const WS_URL = "ws://" + window.location.host +"/ws";
 
 
 interface Measurement {
