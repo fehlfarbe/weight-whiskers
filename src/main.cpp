@@ -67,13 +67,18 @@ FilterOnePole weightLowPass = FilterOnePole(LOWPASS, 0.5, 0);
 
 struct CatMeasurement
 {
+  // UNIX timetamp in seconds
   time_t time = 0;
+  // weight in gram
   uint16_t weight = 0.;
-  float sigma = 0.;
+  // standard deviation
+  float std = 0.;
+  // duration in seconds
   float duration = 0.;
 };
 CatMeasurement measuredCatWeightsBuffer[20];
 int measuredCatWeightsCounter = 0;
+CatMeasurement lastMeasurement;
 
 String measurementsFile = "/measurements.csv";
 String configFile = "/config.json";
@@ -261,6 +266,9 @@ void setup()
 
 void loop()
 {
+  // reconnect wifi if necessary
+  wifiManager.loop();
+
   // clear ws clients
   ws.cleanupClients();
 
@@ -313,8 +321,8 @@ void loop()
     if (weightLowPass.output() > config.scale_weight_min)
     {
       // debug: write values to file
-      File rawValues = LittleFS.open("/rawvalues.csv", FILE_WRITE);
-      rawValues.println("time,raw,mean,sigma");
+      // File rawValues = LittleFS.open("/rawvalues.csv", FILE_WRITE);
+      // rawValues.println("time,raw,mean,std");
       // cat sits on the throne
       leds[0] = CRGB::Yellow;
       FastLED.show();
@@ -327,11 +335,11 @@ void loop()
         auto value = scale.get_units(2);
         weightLowPass.input(value);
         statistics.input(value);
-        rawValues.printf("%lu,%.2f,%.2f,%.2f\n", millis(), value, statistics.mean(), statistics.sigma());
-        display.drawWeightScreen(weightLowPass.output());
+        // rawValues.printf("%lu,%.2f,%.2f,%.2f\n", millis(), value, statistics.mean(), statistics.sigma());
+        display.drawWeightScreen(weightLowPass.output(), lastMeasurement.weight);
         delay(10);
       }
-      rawValues.close();
+      // rawValues.close();
       // cat left the throne
       auto duration = (millis() - occupationStart) / 1000.;
       if (duration > config.presence_time_min)
@@ -341,12 +349,13 @@ void loop()
         CatMeasurement measurement;
         time(&measurement.time); // Get current timestamp
         measurement.weight = statistics.mean();
-        measurement.sigma = statistics.sigma();
+        measurement.std = statistics.sigma();
         measurement.duration = duration;
         measuredCatWeightsBuffer[measuredCatWeightsCounter] = measurement; // save value to send via mqtt
         measuredCatWeightsCounter++;
+        lastMeasurement = measurement;
         writeMeasurement(measurement);
-        display.drawWeightScreen(statistics.mean());
+        display.drawWeightScreen(statistics.mean(), lastMeasurement.weight);
         playToneSuccess();
         delay(5000);
       }
@@ -355,7 +364,7 @@ void loop()
     }
 
     // write weight to display
-    display.drawWeightScreen(weightLowPass.output());
+    display.drawWeightScreen(weightLowPass.output(), lastMeasurement.weight);
 
     // tare if necessary
     if (abs(weightLowPass.output()) < config.scale_tare_thresh)
@@ -824,7 +833,7 @@ void sendMQTTCatWeights()
       }
 
       // send MQTT
-      String msg = "sensors,device=cat_scale,field=cat_weight value=" + String(measuredCatWeightsBuffer[i].weight) + ",sigma=" + String(measuredCatWeightsBuffer[i].sigma) + ",duration=" + String(measuredCatWeightsBuffer[i].duration);
+      String msg = "sensors,device=cat_scale,field=cat_weight value=" + String(measuredCatWeightsBuffer[i].weight) + ",std=" + String(measuredCatWeightsBuffer[i].std) + ",duration=" + String(measuredCatWeightsBuffer[i].duration);
       Serial.printf("Send MQTT message on topic %s: %s\n", config.mqtt_topic_cat_weight.c_str(), msg.c_str());
       mqtt.publish(config.mqtt_topic_cat_weight.c_str(), msg.c_str());
     }
@@ -856,10 +865,11 @@ bool writeMeasurement(CatMeasurement &m)
 
   if (writeHeader)
   {
-    f.printf("time,weight,sigma,duration\n");
+    f.println("time,weight,std,duration");
   }
 
-  f.printf("%ld,%hu,%.2f,%.2f\n", m.time, m.weight, m.sigma, m.duration);
+  f.printf("%ld,%hu,%.2f,%.2f", m.time, m.weight, m.std, m.duration);
+  f.println();
   f.close();
 
   return true;

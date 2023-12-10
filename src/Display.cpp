@@ -87,53 +87,71 @@ namespace weightwhiskers
         display.display();
     }
 
-    void Display::drawWeightScreen(float weight, float lastWeight)
+    void Display::drawWeightScreen(int weight, int lastWeight)
     {
         display.clearDisplay();
         display.setTextSize(DISPLAY_TEXT_SIZE);
         display.setTextColor(WHITE);
         // draw weight
         display.setCursor(0, 10);
-        display.printf("%.0fg", weight);
+        display.printf("%dg", weight);
 
         // draw last measured weight
         if (lastWeight)
         {
             display.setTextSize(1);
             display.setTextColor(WHITE);
-            display.setCursor(0, display.height() - 10);
-            display.printf("Last: %.0fg", lastWeight);
+            display.setCursor(0, display.height()-6);
+            display.printf("%dg", lastWeight);
         }
         // draw WiFi signal strength bars
-        auto rssi = WiFi.RSSI();
-        // display.setTextSize(1);
-        // display.setCursor(0, display.height() - 10);
-        // display.printf("%d", rssi);
-        display.setCursor(0, 0);
-        size_t bars = 4;
-        if (rssi >= -55)
-            bars = 4;
-        else if (rssi >= -66)
-            bars = 3;
-        else if (rssi >= -77)
-            bars = 2;
-        else if (rssi >= -88)
-            bars = 1;
         uint16_t barWidth = 2;
         uint16_t barMinHeight = 4;
         uint16_t barHeightStep = 2;
         uint16_t currentHeight = barMinHeight;
         uint16_t startX = display.width() - 4 * barWidth - 4;
         uint16_t startY = display.height();
-        for (size_t i = 0; i < bars; i++)
+        if (WiFi.getMode() == WIFI_STA)
         {
-            uint16_t x = startX + i * barWidth + i;
-            uint16_t y = startY - currentHeight;
-            uint16_t w = barWidth;
-            uint16_t h = currentHeight;
-            // Serial.printf("Bar start x=%d, y=%d w=%d h=%d (RSSI: %d)\n", x, y, w, h, rssi);
-            display.fillRect(x, y, w, h, WHITE);
-            currentHeight += barHeightStep;
+            if (WiFi.isConnected())
+            {
+                auto rssi = WiFi.RSSI();
+                // display.setTextSize(1);
+                // display.setCursor(0, display.height() - 10);
+                // display.printf("%d", rssi);
+                display.setCursor(0, 0);
+                size_t bars = 4;
+                if (rssi >= -55)
+                    bars = 4;
+                else if (rssi >= -66)
+                    bars = 3;
+                else if (rssi >= -77)
+                    bars = 2;
+                else if (rssi >= -88)
+                    bars = 1;
+                for (size_t i = 0; i < bars; i++)
+                {
+                    uint16_t x = startX + i * barWidth + i;
+                    uint16_t y = startY - currentHeight;
+                    uint16_t w = barWidth;
+                    uint16_t h = currentHeight;
+                    // Serial.printf("Bar start x=%d, y=%d w=%d h=%d (RSSI: %d)\n", x, y, w, h, rssi);
+                    display.fillRect(x, y, w, h, WHITE);
+                    currentHeight += barHeightStep;
+                }
+            }
+            else
+            {
+                // no connection
+                display.setCursor(startX, startY);
+                display.setTextSize(1);
+                display.print("x");
+            }
+        } else {
+            // AP mode
+            display.setCursor(startX, startY);
+            display.setTextSize(1);
+            display.print("AP");
         }
         // draw WiFi icon
         uint16_t iconWidth = 9;

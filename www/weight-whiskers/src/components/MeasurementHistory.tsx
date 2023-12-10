@@ -11,16 +11,16 @@ export interface Measurement {
 export interface MeasurementCSV {
   time: number;
   weight: number;
-  variance: number;
-  sigma: number;
+  std: number;
+  duration: number;
 }
 
 class Point implements Datum {
   id: number = 0;
-  timestamp: number = 0;
   x: string = "";
   y: number = 0;
   selected: boolean = false;
+  rawData: MeasurementCSV|undefined = undefined;
 }
 
 class MeasurementData implements Serie {
@@ -51,7 +51,7 @@ const MeasurementHistory = () => {
     var pointsToDelete = dataHistory[0].data.filter(d => d.selected);
     var deletePayload = {
       action: "delete",
-      timestamps: pointsToDelete.map(point => point.timestamp)
+      timestamps: pointsToDelete.map(point => point.rawData?.time)
     };
 
     fetch("/api/measurements", {
@@ -89,16 +89,17 @@ const MeasurementHistory = () => {
         header: true,
         download: true,
         complete: (result: Papa.ParseResult<MeasurementCSV>) => {
+          console.log(result);
           let measurementData = new MeasurementData();
           measurementData.id = "Measured weight";
           result.data.forEach((m, idx) => {
             if (m.time > 0) {
               measurementData.data.push({
                 id: idx,
-                timestamp: m.time,
                 x: new Date(m.time * 1000).toLocaleString(),
                 y: m.weight,
-                selected: false
+                selected: false,
+                rawData: m
               })
             }
           });
@@ -154,22 +155,22 @@ const MeasurementHistory = () => {
           <caption>Measurements</caption>
           <thead>
             <tr>
-              <th style={{ width: "20px" }}></th>
               <th>Date</th>
               <th>Weight (g)</th>
+              <th>Duration (s)</th>
             </tr>
           </thead>
           <tbody>
             {dataHistory[0].data.map((row, idx) => (
-              <tr key={row.id} onClick={e => selectPoint(e, row.id)}>
-                <td data-label="Select"><input type="checkbox" value={row.id} checked={row.selected} readOnly={true} /></td>
-                <td data-label="Date">{row.x}</td>
-                <td data-label="Weight">{row.y} {row.selected}</td>
+              <tr key={row.id} onClick={e => selectPoint(e, row.id)} className={(row.selected ? 'selected' : '')}>
+                <td data-label="Date" className={(row.selected ? 'primary' : '')}>{row.x}</td>
+                <td data-label="Weight">{row.y}</td>
+                <td data-label="Duration">{row.rawData?.duration}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        <button onClick={deleteSelectedPoints}>Delete selected</button>
+        <button onClick={deleteSelectedPoints}>Delete selected ({dataHistory[0].data.filter(item => item.selected).length})</button>
       </div>
       <div>
 
