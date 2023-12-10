@@ -1,0 +1,277 @@
+{
+  "Header": {
+    "GenerationSoftware": {
+      "Vendor": "KiCad",
+      "Application": "Pcbnew",
+      "Version": "7.0.9-7.0.9~ubuntu22.04.1"
+    },
+    "CreationDate": "2023-12-10T21:51:41+01:00"
+  },
+  "GeneralSpecs": {
+    "ProjectId": {
+      "Name": "cat_scale",
+      "GUID": "6361745f-7363-4616-9c65-2e6b69636164",
+      "Revision": "rev?"
+    },
+    "Size": {
+      "X": 72.6,
+      "Y": 35.6192
+    },
+    "LayerNumber": 2,
+    "BoardThickness": 1.6,
+    "Finish": "None"
+  },
+  "DesignRules": [
+    {
+      "Layers": "Outer",
+      "PadToPad": 0.0,
+      "PadToTrack": 0.0,
+      "TrackToTrack": 0.2,
+      "MinLineWidth": 0.2,
+      "TrackToRegion": 0.5,
+      "RegionToRegion": 0.5
+    }
+  ],
+  "FilesAttributes": [
+    {
+      "Path": "cat_scale-F_Cu.gbr",
+      "FileFunction": "Copper,L1,Top",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In1_Cu.gbr",
+      "FileFunction": "Copper,L2,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In2_Cu.gbr",
+      "FileFunction": "Copper,L3,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In3_Cu.gbr",
+      "FileFunction": "Copper,L4,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In4_Cu.gbr",
+      "FileFunction": "Copper,L5,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In5_Cu.gbr",
+      "FileFunction": "Copper,L6,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In6_Cu.gbr",
+      "FileFunction": "Copper,L7,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In7_Cu.gbr",
+      "FileFunction": "Copper,L8,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In8_Cu.gbr",
+      "FileFunction": "Copper,L9,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In9_Cu.gbr",
+      "FileFunction": "Copper,L10,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In10_Cu.gbr",
+      "FileFunction": "Copper,L11,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In11_Cu.gbr",
+      "FileFunction": "Copper,L12,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In12_Cu.gbr",
+      "FileFunction": "Copper,L13,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In13_Cu.gbr",
+      "FileFunction": "Copper,L14,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In14_Cu.gbr",
+      "FileFunction": "Copper,L15,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In15_Cu.gbr",
+      "FileFunction": "Copper,L16,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In16_Cu.gbr",
+      "FileFunction": "Copper,L17,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In17_Cu.gbr",
+      "FileFunction": "Copper,L18,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In18_Cu.gbr",
+      "FileFunction": "Copper,L19,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In19_Cu.gbr",
+      "FileFunction": "Copper,L20,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In20_Cu.gbr",
+      "FileFunction": "Copper,L21,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In21_Cu.gbr",
+      "FileFunction": "Copper,L22,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In22_Cu.gbr",
+      "FileFunction": "Copper,L23,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In23_Cu.gbr",
+      "FileFunction": "Copper,L24,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In24_Cu.gbr",
+      "FileFunction": "Copper,L25,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In25_Cu.gbr",
+      "FileFunction": "Copper,L26,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In26_Cu.gbr",
+      "FileFunction": "Copper,L27,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In27_Cu.gbr",
+      "FileFunction": "Copper,L28,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In28_Cu.gbr",
+      "FileFunction": "Copper,L29,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In29_Cu.gbr",
+      "FileFunction": "Copper,L30,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-In30_Cu.gbr",
+      "FileFunction": "Copper,L31,Inr",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-B_Cu.gbr",
+      "FileFunction": "Copper,L2,Bot",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-F_Paste.gbr",
+      "FileFunction": "SolderPaste,Top",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-B_Paste.gbr",
+      "FileFunction": "SolderPaste,Bot",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-F_Silkscreen.gbr",
+      "FileFunction": "Legend,Top",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-B_Silkscreen.gbr",
+      "FileFunction": "Legend,Bot",
+      "FilePolarity": "Positive"
+    },
+    {
+      "Path": "cat_scale-F_Mask.gbr",
+      "FileFunction": "SolderMask,Top",
+      "FilePolarity": "Negative"
+    },
+    {
+      "Path": "cat_scale-B_Mask.gbr",
+      "FileFunction": "SolderMask,Bot",
+      "FilePolarity": "Negative"
+    },
+    {
+      "Path": "cat_scale-Edge_Cuts.gbr",
+      "FileFunction": "Profile",
+      "FilePolarity": "Positive"
+    }
+  ],
+  "MaterialStackup": [
+    {
+      "Type": "Legend",
+      "Name": "Top Silk Screen"
+    },
+    {
+      "Type": "SolderPaste",
+      "Name": "Top Solder Paste"
+    },
+    {
+      "Type": "SolderMask",
+      "Thickness": 0.01,
+      "Name": "Top Solder Mask"
+    },
+    {
+      "Type": "Copper",
+      "Thickness": 0.035,
+      "Name": "F.Cu"
+    },
+    {
+      "Type": "Dielectric",
+      "Thickness": 1.51,
+      "Material": "FR4",
+      "Name": "F.Cu/B.Cu",
+      "Notes": "Type: dielectric layer 1 (from F.Cu to B.Cu)"
+    },
+    {
+      "Type": "Copper",
+      "Thickness": 0.035,
+      "Name": "B.Cu"
+    },
+    {
+      "Type": "SolderMask",
+      "Thickness": 0.01,
+      "Name": "Bottom Solder Mask"
+    },
+    {
+      "Type": "SolderPaste",
+      "Name": "Bottom Solder Paste"
+    },
+    {
+      "Type": "Legend",
+      "Name": "Bottom Silk Screen"
+    }
+  ]
+}

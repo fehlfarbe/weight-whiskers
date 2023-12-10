@@ -5,13 +5,13 @@
 .vscode/
 
 *.zip
-*.pdf
 hardware/~*
 hardware/gerbers
 hardware/stencil
 hardware/cat_scale_footprints
-data
+data/measurements.csv
 www/weight-whiskers/public/api/*
+doc/datasheets
 
 # Prerequisites
 *.d
