@@ -13,6 +13,7 @@ export interface MeasurementCSV {
   weight: number;
   std: number;
   duration: number;
+  weightDropping: number;
 }
 
 class Point implements Datum {
@@ -20,13 +21,14 @@ class Point implements Datum {
   x: string = "";
   y: number = 0;
   selected: boolean = false;
-  rawData: MeasurementCSV|undefined = undefined;
+  rawData: MeasurementCSV | undefined = undefined;
 }
 
 class MeasurementData implements Serie {
   id: string = 'series';
   data: Array<Point> = [];
 }
+
 
 const MeasurementHistory = () => {
   const [dataHistory, setDataHistory] = useState<Array<MeasurementData>>([new MeasurementData()]);
@@ -80,6 +82,49 @@ const MeasurementHistory = () => {
       });
   }
 
+  // draw std dev hose around values
+  const StdDevLine = (props: any) => {
+    const { series, xScale, yScale } = props;
+
+    // Draw standard deviation lines
+    // Create an area layer to represent the "hose"
+    const areaData = series[0].data.map((point: any) => ({
+      x: xScale(point.data.x),
+      y0: yScale(point.data.y - point.data.rawData.std / 2), // Lower bound
+      y1: yScale(point.data.y + point.data.rawData.std / 2), // Upper bound
+    }));
+
+    return (
+      <path
+        d={`M${areaData.map((d: any) => `${d.x},${d.y1}`).join('L')}L${areaData
+          .slice()
+          .reverse()
+          .map((d: any) => `${d.x},${d.y0}`)
+          .join('L')}Z`}
+        fill="rgba(255, 0, 0, 0.2)" // Adjust color and opacity as needed
+      />
+    );
+  };
+
+  const SelectedMeasurements = (props: any) => {
+    const { series, xScale, yScale, innerHeight } = props;
+    const areaData = series[0].data.filter((d: any) => d.data.selected).map((point: any) => ({
+      x: xScale(point.data.x),
+    }));
+
+    return areaData.map((p: any) => (
+      (<line
+        key={p.x}
+        x1={p.x}
+        y1={0}
+        x2={p.x}
+        y2={innerHeight}
+        stroke="rgba(255, 0, 0, 1)"
+        strokeWidth={10}
+      />)
+    ));
+  };
+
   // load config
   useEffect(() => {
     Papa.parse(
@@ -89,7 +134,7 @@ const MeasurementHistory = () => {
         header: true,
         download: true,
         complete: (result: Papa.ParseResult<MeasurementCSV>) => {
-          console.log(result);
+          console.log("Parsed CSV data", result);
           let measurementData = new MeasurementData();
           measurementData.id = "Measured weight";
           result.data.forEach((m, idx) => {
@@ -116,6 +161,7 @@ const MeasurementHistory = () => {
       {dataHistory[0].data.length == 0 ? <LoadingImage></LoadingImage> : null}
       <div style={{ height: "500px" }}>
         <ResponsiveLine
+          enableSlices="x"
           data={dataHistory}
           margin={{ top: 10, right: 5, bottom: 150, left: 60 }}
           xScale={{ type: 'point' }}
@@ -146,40 +192,62 @@ const MeasurementHistory = () => {
           axisRight={null}
           pointSize={10}
           pointBorderWidth={2}
-          pointBorderColor={{ from: 'serieColor' }}
-          // pointLabelYOffset={-12}
+          // enableArea={true}
           useMesh={true}
-        /></div>
-      <div>
-        <table className="hoverable">
-          <caption>Measurements</caption>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Weight (g)</th>
-              <th>Duration (s)</th>
+          layers={[
+            StdDevLine,
+            SelectedMeasurements,
+            'grid',
+            'markers',
+            'areas',
+            'crosshair',
+            'lines',
+            'slices',
+            'axes',
+            'points',
+            'legends',
+          ]}
+          theme={{
+            crosshair: {
+              line: {
+                stroke: '#774dd7',
+                strokeOpacity: 1,
+                strokeWidth: 2
+              }
+            }
+          }}
+        />
+      </div>
+    </div>
+    <div>
+      <table className="hoverable">
+        <caption>Measurements</caption>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Weight (g)</th>
+            <th>Duration (s)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {dataHistory[0].data.map((row, idx) => (
+            <tr key={row.id} onClick={e => selectPoint(e, row.id)} className={(row.selected ? 'selected' : '')}>
+              <td data-label="Date" className={(row.selected ? 'primary' : '')}>{row.x}</td>
+              <td data-label="Weight">{row.y}</td>
+              <td data-label="Duration">{row.rawData?.duration}</td>
             </tr>
-          </thead>
-          <tbody>
-            {dataHistory[0].data.map((row, idx) => (
-              <tr key={row.id} onClick={e => selectPoint(e, row.id)} className={(row.selected ? 'selected' : '')}>
-                <td data-label="Date" className={(row.selected ? 'primary' : '')}>{row.x}</td>
-                <td data-label="Weight">{row.y}</td>
-                <td data-label="Duration">{row.rawData?.duration}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <button onClick={deleteSelectedPoints}>Delete selected ({dataHistory[0].data.filter(item => item.selected).length})</button>
-      </div>
-      <div>
+          ))}
+        </tbody>
+      </table>
+      <button onClick={deleteSelectedPoints}>Delete selected ({dataHistory[0].data.filter(item => item.selected).length})</button>
+    </div>
+    <div>
 
-        <a href="/api/measurements" className="button">Download as CSV</a>
-        <form action="/api/measurements" method="POST" encType="multipart/form-data">
-          <input name="measurements" type="file" className="icon-upload" />
-          <input type="submit" value="Upload CSV (will overwrite data)" />
-        </form>
-      </div>
+      <a href="/api/measurements" className="button">Download as CSV</a>
+      <form action="/api/measurements" method="POST" encType="multipart/form-data">
+        <input name="measurements" type="file" className="icon-upload" />
+        <input type="submit" value="Upload CSV (will overwrite data)" />
+      </form>
     </div>
   </>
 }

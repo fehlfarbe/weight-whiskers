@@ -20,6 +20,8 @@
 #include <melody_factory.h>
 #include "Display.h"
 
+// Debug
+#define SAVE_RAW_VAL 1
 // Button
 #define ENCODER_BTN 9
 #define ENCODER_A 7
@@ -75,6 +77,8 @@ struct CatMeasurement
   float std = 0.;
   // duration in seconds
   float duration = 0.;
+  // weight of poo/urine "dropping"
+  uint16_t weightDropping = 0;
 };
 CatMeasurement measuredCatWeightsBuffer[20];
 int measuredCatWeightsCounter = 0;
@@ -122,6 +126,7 @@ void setupScale();
 void tare(int count);
 void calibrate(long weight);
 void apCallback(AsyncWiFiManager *mgr);
+void WiFiEvent(WiFiEvent_t event);
 void handleConfig(AsyncWebServerRequest *request);
 void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handeMeasurementsUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
@@ -196,6 +201,8 @@ void setup()
   // Setup WiFi
   Serial.println("WiFi autoconnect...");
   display.drawWiFi();
+  WiFi.setAutoReconnect(true);
+  WiFi.onEvent(WiFiEvent);
   wifiManager.setAPCallback(apCallback);
   if (!wifiManager.autoConnect("weight-whiskers"))
   {
@@ -266,9 +273,6 @@ void setup()
 
 void loop()
 {
-  // reconnect wifi if necessary
-  wifiManager.loop();
-
   // clear ws clients
   ws.cleanupClients();
 
@@ -321,43 +325,63 @@ void loop()
     if (weightLowPass.output() > config.scale_weight_min)
     {
       // debug: write values to file
-      // File rawValues = LittleFS.open("/rawvalues.csv", FILE_WRITE);
-      // rawValues.println("time,raw,mean,std");
+      #ifdef SAVE_RAW_VAL
+      File rawValues = LittleFS.open("/rawvalues.csv", FILE_WRITE);
+      rawValues.println("time,raw,mean,std");
+      #endif
       // cat sits on the throne
       leds[0] = CRGB::Yellow;
       FastLED.show();
-      auto occupationStart = current;
+      // prepare duration and temp value
+      auto presenceStart = current;
+      long duration = 0;
+      float bestWeightStd = infinityf();
+      float bestWeight = 0;
+      // prepare filter
       auto statistics = RunningStatistics();
-      statistics.setWindowSecs(10);
+      statistics.setWindowSecs(config.presence_time_min);
       statistics.setInitialValue(weightLowPass.output());
+      // run measurement
       while (weightLowPass.output() > config.scale_weight_min)
       {
         auto value = scale.get_units(2);
+        duration = (millis() - presenceStart) / 1000.;
         weightLowPass.input(value);
         statistics.input(value);
-        // rawValues.printf("%lu,%.2f,%.2f,%.2f\n", millis(), value, statistics.mean(), statistics.sigma());
+        #ifdef SAVE_RAW_VAL
+        rawValues.printf("%lu,%.2f,%.2f,%.2f\n", millis()-presenceStart, value, statistics.mean(), statistics.sigma());
+        #endif
         display.drawWeightScreen(weightLowPass.output(), lastMeasurement.weight);
+        // use value with lowes std dev when minimum presence time is reached
+        if(duration > config.presence_time_min && statistics.sigma() < bestWeightStd) {
+          bestWeightStd = statistics.sigma();
+          bestWeight = statistics.mean();
+        }
         delay(10);
       }
-      // rawValues.close();
-      // cat left the throne
-      auto duration = (millis() - occupationStart) / 1000.;
+      #ifdef SAVE_RAW_VAL
+      rawValues.close();
+      #endif
+      // cat left the throne, save measurement if minimum presence time was reached
       if (duration > config.presence_time_min)
       {
+        // show success
         leds[0] = CRGB::Green;
         FastLED.show();
+        display.drawWeightScreen(bestWeight, lastMeasurement.weight);
+        playToneSuccess();
+        // wait for settlement to measure droppings and write measurement
+        delay(5000);
         CatMeasurement measurement;
         time(&measurement.time); // Get current timestamp
-        measurement.weight = statistics.mean();
-        measurement.std = statistics.sigma();
+        measurement.weight = bestWeight;
+        measurement.std = bestWeightStd;
         measurement.duration = duration;
+        measurement.weightDropping = scale.get_units(10);
         measuredCatWeightsBuffer[measuredCatWeightsCounter] = measurement; // save value to send via mqtt
         measuredCatWeightsCounter++;
         lastMeasurement = measurement;
         writeMeasurement(measurement);
-        display.drawWeightScreen(statistics.mean(), lastMeasurement.weight);
-        playToneSuccess();
-        delay(5000);
       }
       delay(1000);
       tare(10);
@@ -506,6 +530,55 @@ void apCallback(AsyncWiFiManager *mgr)
   display.drawWiFiAPMode();
   leds[0] = CRGB::Blue;
   FastLED.show();
+}
+
+/**
+ * @brief handles WiFi events and auto reconnects
+ *
+ */
+void WiFiEvent(WiFiEvent_t event)
+{
+  switch (event)
+  {
+  case ARDUINO_EVENT_WIFI_AP_START:
+    ESP_LOGI(TAG, "AP Started");
+    leds[0] = CRGB::Blue;
+    FastLED.show();
+    break;
+  case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+    ESP_LOGI(TAG, "AP user connected");
+    leds[0] = CRGB::Aqua;
+    FastLED.show();
+    break;
+  case ARDUINO_EVENT_WIFI_AP_STOP:
+    ESP_LOGI(TAG, "AP Stopped");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_START:
+    ESP_LOGI(TAG, "STA Started");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+    ESP_LOGI(TAG, "STA Connected");
+    break;
+  case ARDUINO_EVENT_WIFI_STA_GOT_IP6:
+    ESP_LOGI(TAG, "STA IPv6: ");
+    // ESP_LOGI( TAG, "%s", WiFi.localIPv6().toString());
+    break;
+  case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+    // ESP_LOGI( TAG, "STA IPv4: ");
+    ESP_LOGI(TAG, "%s", WiFi.localIP());
+    break;
+  case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+  case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+    ESP_LOGI(TAG, "STA Disconnected -> reconnect");
+    WiFi.reconnect();
+    break;
+  case ARDUINO_EVENT_WIFI_STA_STOP:
+    ESP_LOGI(TAG, "STA Stopped");
+    break;
+  default:
+    break;
+  }
+  ESP_LOGI(TAG, "WiFi mode %d", WiFi.getMode());
 }
 
 void handleConfig(AsyncWebServerRequest *request)
@@ -865,10 +938,10 @@ bool writeMeasurement(CatMeasurement &m)
 
   if (writeHeader)
   {
-    f.println("time,weight,std,duration");
+    f.println("time,weight,std,duration,dropping");
   }
 
-  f.printf("%ld,%hu,%.2f,%.2f", m.time, m.weight, m.std, m.duration);
+  f.printf("%ld,%hu,%.2f,%.2f,%hu", m.time, m.weight, m.std, m.duration, m.weightDropping);
   f.println();
   f.close();
 
