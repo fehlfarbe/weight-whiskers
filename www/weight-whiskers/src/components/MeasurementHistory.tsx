@@ -1,4 +1,4 @@
-import React, { ChangeEvent, MouseEventHandler, useEffect, useState } from "react";
+import React, { ChangeEvent, useEffect, useState } from "react";
 import { Datum, ResponsiveLine, Serie } from '@nivo/line'
 import Papa from "papaparse";
 import { LoadingImage } from "./Loading";
@@ -29,28 +29,64 @@ class MeasurementData implements Serie {
   data: Array<Point> = [];
 }
 
+enum MeasurementFilter {
+  LastMonth = "Last month",
+  AllData = "All data"
+}
+
 
 const MeasurementHistory = () => {
-  const [dataHistory, setDataHistory] = useState<Array<MeasurementData>>([new MeasurementData()]);
+  const [dataFilter, setDataFilter] = useState<MeasurementFilter>(MeasurementFilter.LastMonth);
+  const [filteredData, setFilteredData] = useState<Array<MeasurementData>>([new MeasurementData()]);
+  const [allData, setAllData] = useState<Array<MeasurementData>>([new MeasurementData()]);
   const commonConfig = { delimiter: ",", dynamicTyping: true };
+
+  // update measurements filter via dropdown
+  const updateMeasurementsFilter = (event: ChangeEvent<HTMLSelectElement>) => {
+    // console.log("filtering...", event, dataFilter);
+    // setFilteredData(dataHistory);
+    setDataFilter(event.target.value as MeasurementFilter);
+  }
+
+  // filter data
+  const filterMeasurements = () => {
+    var measurements = new MeasurementData();
+
+    switch (dataFilter) {
+      case MeasurementFilter.AllData:
+        console.log("all data");
+        measurements = allData[0];
+        break;
+      case MeasurementFilter.LastMonth:
+        console.log("last month");
+        var startDate = new Date();
+        startDate.setMonth(startDate.getMonth() - 1);
+        measurements.data = allData[0].data.filter(d => new Date(d.x) > startDate);
+        measurements.id = allData[0].id;
+        break;
+    }
+
+    // update data
+    setFilteredData([measurements]);
+  }
 
   // on click table element
   const selectPoint = (event: React.MouseEvent<HTMLTableRowElement>, id: number) => {
     event.preventDefault();
-    var history = dataHistory[0];
+    var history = filteredData[0];
     var idx = history.data.findIndex(item => item.id == id);
     history.data[idx].selected = !history.data[idx].selected;
-    setDataHistory([
+    setFilteredData([
       { ...history, data: history.data }
     ]
     );
-    console.log(dataHistory);
+    console.log(filteredData);
   }
 
   // send delete request to delete selected elements identified by timestamp
   const deleteSelectedPoints = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
-    var pointsToDelete = dataHistory[0].data.filter(d => d.selected);
+    var pointsToDelete = filteredData[0].data.filter(d => d.selected);
     var deletePayload = {
       action: "delete",
       timestamps: pointsToDelete.map(point => point.rawData?.time)
@@ -68,10 +104,10 @@ const MeasurementHistory = () => {
       .then((response) => {
         console.log(response.status);
         if (response.status == 200) {
-          setDataHistory([
+          setAllData([
             {
-              ...dataHistory[0],
-              data: dataHistory[0].data.filter(d => !d.selected)
+              ...allData[0],
+              data: allData[0].data.filter(d => !d.selected)
             }
           ]
           );
@@ -125,44 +161,56 @@ const MeasurementHistory = () => {
     ));
   };
 
-  // load config
+  // load all measurements
   useEffect(() => {
-    Papa.parse(
-      "/api/measurements",
-      {
-        ...commonConfig,
-        header: true,
-        download: true,
-        complete: (result: Papa.ParseResult<MeasurementCSV>) => {
-          console.log("Parsed CSV data", result);
-          let measurementData = new MeasurementData();
-          measurementData.id = "Measured weight";
-          result.data.forEach((m, idx) => {
-            if (m.time > 0) {
-              measurementData.data.push({
-                id: idx,
-                x: new Date(m.time * 1000).toLocaleString(),
-                y: m.weight,
-                selected: false,
-                rawData: m
-              })
-            }
-          });
-          let series = new Array<MeasurementData>(measurementData);
-          setDataHistory(series);
+    if (allData[0].data.length == 0) {
+      // load data
+      Papa.parse(
+        "/api/measurements",
+        {
+          ...commonConfig,
+          header: true,
+          download: true,
+          complete: (result: Papa.ParseResult<MeasurementCSV>) => {
+            console.log("Parsed CSV data", result);
+            let measurementData = new MeasurementData();
+            measurementData.id = "Measured weight";
+            result.data.forEach((m, idx) => {
+              if (m.time > 0) {
+                measurementData.data.push({
+                  id: idx,
+                  x: new Date(m.time * 1000).toLocaleString(),
+                  y: m.weight,
+                  selected: false,
+                  rawData: m
+                })
+              }
+            });
+            let series = new Array<MeasurementData>(measurementData);
+            setAllData(series);
+          }
         }
-      }
-    );
-  }, [])
+      );
+    } else {
+      // filter data to update graph
+      filterMeasurements();
+    }
+  }, [dataFilter, allData])
 
   return <>
     <div>
       <h1>Measurements</h1>
-      {dataHistory[0].data.length == 0 ? <LoadingImage></LoadingImage> : null}
+      {allData[0].data.length == 0 ? <LoadingImage></LoadingImage> : null}
+      <div style={{ textAlign: "center" }}>
+        <select value={dataFilter} onChange={updateMeasurementsFilter}>
+          <option value={MeasurementFilter.LastMonth}>Last month</option>
+          <option value={MeasurementFilter.AllData}>All measurements</option>
+        </select>
+      </div>
       <div style={{ height: "500px" }}>
         <ResponsiveLine
           enableSlices="x"
-          data={dataHistory}
+          data={filteredData}
           margin={{ top: 10, right: 5, bottom: 150, left: 60 }}
           xScale={{ type: 'point' }}
           yScale={{
@@ -230,7 +278,7 @@ const MeasurementHistory = () => {
           </tr>
         </thead>
         <tbody>
-          {dataHistory[0].data.map((row, idx) => (
+          {filteredData[0].data.map((row, idx) => (
             <tr key={row.id} onClick={e => selectPoint(e, row.id)} className={(row.selected ? 'selected' : '')}>
               <td data-label="Date" className={(row.selected ? 'primary' : '')}>{row.x}</td>
               <td data-label="Weight">{row.y}</td>
@@ -239,7 +287,7 @@ const MeasurementHistory = () => {
           ))}
         </tbody>
       </table>
-      <button onClick={deleteSelectedPoints}>Delete selected ({dataHistory[0].data.filter(item => item.selected).length})</button>
+      <button onClick={deleteSelectedPoints}>Delete selected ({allData[0].data.filter(item => item.selected).length})</button>
     </div>
     <div>
 
