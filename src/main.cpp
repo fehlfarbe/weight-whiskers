@@ -377,7 +377,7 @@ void loop()
         measurement.weight = bestWeight;
         measurement.std = bestWeightStd;
         measurement.duration = duration;
-        measurement.weightDropping = scale.get_units(10);
+        measurement.weightDropping = max(0, (int)scale.get_units(10));
         measuredCatWeightsBuffer[measuredCatWeightsCounter] = measurement; // save value to send via mqtt
         measuredCatWeightsCounter++;
         lastMeasurement = measurement;
