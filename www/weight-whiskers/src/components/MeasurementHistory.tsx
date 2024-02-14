@@ -31,6 +31,7 @@ class MeasurementData implements Serie {
 
 enum MeasurementFilter {
   LastMonth = "Last month",
+  LastThreeMonths = "Last three months",
   AllData = "All data"
 }
 
@@ -51,21 +52,21 @@ const MeasurementHistory = () => {
   // filter data
   const filterMeasurements = () => {
     var measurements = new MeasurementData();
-
-    switch (dataFilter) {
-      case MeasurementFilter.AllData:
-        console.log("all data");
-        measurements = allData[0];
-        break;
-      case MeasurementFilter.LastMonth:
-        console.log("last month");
-        var startDate = new Date();
-        startDate.setMonth(startDate.getMonth() - 1);
-        measurements.data = allData[0].data.filter(d => new Date(d.x) > startDate);
-        measurements.id = allData[0].id;
-        break;
+    if (dataFilter == MeasurementFilter.AllData) {
+      measurements = allData[0];
+    } else {
+      var startDate = new Date();
+      switch (dataFilter) {
+        case MeasurementFilter.LastMonth:
+          startDate.setMonth(startDate.getMonth() - 1);
+          break;
+        case MeasurementFilter.LastThreeMonths:
+          startDate.setMonth(startDate.getMonth() - 3);
+          break;
+      }
+      measurements.data = allData[0].data.filter(d => new Date(d.x) > startDate);
+      measurements.id = allData[0].id;
     }
-
     // update data
     setFilteredData([measurements]);
   }
@@ -203,8 +204,11 @@ const MeasurementHistory = () => {
       {allData[0].data.length == 0 ? <LoadingImage></LoadingImage> : null}
       <div style={{ textAlign: "center" }}>
         <select value={dataFilter} onChange={updateMeasurementsFilter}>
-          <option value={MeasurementFilter.LastMonth}>Last month</option>
-          <option value={MeasurementFilter.AllData}>All measurements</option>
+          {
+            Object.values(MeasurementFilter).map(value => (
+              <option key={value} value={value}>{value}</option>
+            ))
+          }
         </select>
       </div>
       <div style={{ height: "500px" }}>
