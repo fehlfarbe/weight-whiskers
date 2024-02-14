@@ -13,7 +13,7 @@ export interface MeasurementCSV {
   weight: number;
   std: number;
   duration: number;
-  weightDropping: number;
+  dropping: number;
 }
 
 class Point implements Datum {
@@ -279,6 +279,7 @@ const MeasurementHistory = () => {
             <th>Date</th>
             <th>Weight (g)</th>
             <th>Duration (s)</th>
+            <th>Weight of droppings (g)</th>
           </tr>
         </thead>
         <tbody>
@@ -287,6 +288,7 @@ const MeasurementHistory = () => {
               <td data-label="Date" className={(row.selected ? 'primary' : '')}>{row.x}</td>
               <td data-label="Weight">{row.y}</td>
               <td data-label="Duration">{row.rawData?.duration}</td>
+              <td data-label="Weight of droppings">{row.rawData?.dropping}</td>
             </tr>
           ))}
         </tbody>
