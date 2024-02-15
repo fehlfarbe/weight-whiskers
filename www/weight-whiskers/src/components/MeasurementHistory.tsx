@@ -44,7 +44,6 @@ const MeasurementHistory = () => {
 
   // update measurements filter via dropdown
   const updateMeasurementsFilter = (event: ChangeEvent<HTMLSelectElement>) => {
-    // console.log("filtering...", event, dataFilter);
     // setFilteredData(dataHistory);
     setDataFilter(event.target.value as MeasurementFilter);
   }
@@ -64,7 +63,16 @@ const MeasurementHistory = () => {
           startDate.setMonth(startDate.getMonth() - 3);
           break;
       }
-      measurements.data = allData[0].data.filter(d => new Date(d.x) > startDate);
+      startDate.setHours(0);
+      startDate.setMinutes(0);
+      startDate.setSeconds(0);
+      measurements.data = allData[0].data.filter(d => {
+        if(d.rawData == undefined) {
+          return false;
+        }
+        // compare timestamps to prevent different data formats
+        return d.rawData?.time > startDate.getTime() / 1000.;
+      });
       measurements.id = allData[0].id;
     }
     // update data
