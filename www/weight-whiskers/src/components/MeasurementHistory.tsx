@@ -280,7 +280,7 @@ const MeasurementHistory = () => {
       </div>
     </div>
     <div>
-      <table className="hoverable">
+      <table className="hoverable" style={{overflowX: "hidden"}}>
         <caption>Measurements</caption>
         <thead>
           <tr>
