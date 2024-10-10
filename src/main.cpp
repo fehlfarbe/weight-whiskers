@@ -46,6 +46,8 @@
 #define BUFSIZE 55
 #define JSON_BUFFER 2048
 
+#define TAG "WeightWhiskers"
+
 using namespace weightwhiskers;
 
 // display
@@ -66,6 +68,8 @@ long scaleLastTimestamp = 0;
 long scaleLastWSTimestamp = 0;
 long scaleLastTareThreshTimestamp = 0;
 FilterOnePole weightLowPass = FilterOnePole(LOWPASS, 0.5, 0);
+// DEBUG
+time_t startTime = 0;
 
 struct CatMeasurement
 {
@@ -84,6 +88,8 @@ CatMeasurement measuredCatWeightsBuffer[20];
 int measuredCatWeightsCounter = 0;
 CatMeasurement lastMeasurement;
 
+fs::LittleFSFS fsWWW;
+fs::LittleFSFS fsConfig;
 String measurementsFile = "/measurements.csv";
 String configFile = "/config.json";
 
@@ -135,6 +141,7 @@ void handleSystem(AsyncWebServerRequest *request);
 void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
 void setupMQTT();
 void sendMQTTCatWeights();
+void createMeasurementsFile();
 bool writeMeasurement(CatMeasurement &m);
 void playToneStart();
 void playToneSuccess();
@@ -174,10 +181,10 @@ void setup()
   // start sound
   playToneStart();
 
-  // Filesystem and config
-  if (!LittleFS.begin(true))
+  // config filesystem and config
+  if (!fsConfig.begin(true, "/littlefs", 10, "config"))
   {
-    Serial.println("An Error has occurred while mounting LittleFS");
+    Serial.println("An Error has occurred while mounting config");
     display.drawError("FS Error");
     while (true)
     {
@@ -191,12 +198,17 @@ void setup()
   }
 
   // load config or create config file with default values if not existing
-  listDir(LittleFS, "/", 4);
+  listDir(fsConfig, "/", 4);
   if (!loadConfig())
   {
     saveConfig();
   }
   printConfig();
+
+  // create measurements file if not existing
+  createMeasurementsFile();
+
+  listDir(fsConfig, "/", 4);
 
   // Setup WiFi
   Serial.println("WiFi autoconnect...");
@@ -215,13 +227,29 @@ void setup()
 
   // Set up required URL handlers on the web server.
   // static files, cached for 1 month
-  server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html").setCacheControl("max-age=2678400");
-  server.serveStatic("/config", LittleFS, "/www/index.html").setDefaultFile("index.html").setCacheControl("max-age=2678400");
-  server.serveStatic("/live", LittleFS, "/www/index.html").setDefaultFile("index.html").setCacheControl("max-age=2678400");
+  // config filesystem and config
+  if (!fsWWW.begin(true, "/littlefs", 10, "www"))
+  {
+    Serial.println("An Error has occurred while mounting www");
+    display.drawError("FS Error");
+    while (true)
+    {
+      leds[0] = CRGB::Yellow;
+      FastLED.show();
+      delay(500);
+      leds[0] = CRGB::Black;
+      FastLED.show();
+      delay(500);
+    }
+  }
+  listDir(fsConfig, "/", 4);
+  server.serveStatic("/", fsWWW, "/www/").setDefaultFile("index.html").setCacheControl("max-age=2678400");
+  server.serveStatic("/config", fsWWW, "/www/index.html").setDefaultFile("index.html").setCacheControl("max-age=2678400");
+  server.serveStatic("/live", fsWWW, "/www/index.html").setDefaultFile("index.html").setCacheControl("max-age=2678400");
   server.on("/api/config", HTTP_POST, handleConfig, nullptr, handleConfigUpdate);
   server.on("/api/measurements", HTTP_POST, handleMeasurements, handeMeasurementsUpload);
   server.on("/api/raw", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/rawvalues.csv", "text/csv"); });
+            { request->send(fsConfig, "/rawvalues.csv", "text/csv"); });
   server.on("/api/system", HTTP_GET, handleSystem);
   // attach AsyncWebSocket
   ws.onEvent(onEvent);
@@ -231,6 +259,7 @@ void setup()
   // setup time
   display.drawText("NTP...");
   configTime(0, 0, "pool.ntp.org");
+  time(&startTime);
 
   // setup MQTT
   setupMQTT();
@@ -306,11 +335,12 @@ void loop()
   {
     auto weight = scale.get_units(2);
     auto raw = scale.get_value();
-    Serial.printf("Current measurement: %fg raw: %f\n", weight, raw);
     weightLowPass.input(weight);
+    weightLowPass.print();
+    Serial.printf("Current measurement=%fg raw=%f lowPass=%f up since=%d\n", weight, raw, weightLowPass.output(), startTime);
     if (current - scaleLastWSTimestamp > SCALE_WS_DELAY_MS)
     {
-      ws.printfAll("{\"timestamp\": %lu, \"weight\": %f}", current, weightLowPass.output());
+      ws.printfAll("{\"timestamp\": %lu, \"weight\": %f, \"weight_unfiltered\": %f}", current, weightLowPass.output(), weight);
       scaleLastWSTimestamp = current;
     }
   }
@@ -324,11 +354,11 @@ void loop()
   {
     if (weightLowPass.output() > config.scale_weight_min)
     {
-      // debug: write values to file
-      #ifdef SAVE_RAW_VAL
-      File rawValues = LittleFS.open("/rawvalues.csv", FILE_WRITE);
+// debug: write values to file
+#ifdef SAVE_RAW_VAL
+      File rawValues = fsConfig.open("/rawvalues.csv", FILE_WRITE);
       rawValues.println("time,raw,mean,std");
-      #endif
+#endif
       // cat sits on the throne
       leds[0] = CRGB::Yellow;
       FastLED.show();
@@ -348,20 +378,21 @@ void loop()
         duration = (millis() - presenceStart) / 1000.;
         weightLowPass.input(value);
         statistics.input(value);
-        #ifdef SAVE_RAW_VAL
-        rawValues.printf("%lu,%.2f,%.2f,%.2f\n", millis()-presenceStart, value, statistics.mean(), statistics.sigma());
-        #endif
+#ifdef SAVE_RAW_VAL
+        rawValues.printf("%lu,%.2f,%.2f,%.2f\n", millis() - presenceStart, value, statistics.mean(), statistics.sigma());
+#endif
         display.drawWeightScreen(weightLowPass.output(), lastMeasurement.weight);
         // use value with lowes std dev when minimum presence time is reached
-        if(duration > config.presence_time_min && statistics.sigma() < bestWeightStd) {
+        if (duration > config.presence_time_min && statistics.sigma() < bestWeightStd)
+        {
           bestWeightStd = statistics.sigma();
           bestWeight = statistics.mean();
         }
         delay(10);
       }
-      #ifdef SAVE_RAW_VAL
+#ifdef SAVE_RAW_VAL
       rawValues.close();
-      #endif
+#endif
       // cat left the throne, save measurement if minimum presence time was reached
       if (duration > config.presence_time_min)
       {
@@ -397,7 +428,7 @@ void loop()
     }
     else
     {
-      if (!scaleLastTareThreshTimestamp)
+      if (!scaleLastTareThreshTimestamp || current < scaleLastTareThreshTimestamp)
       {
         scaleLastTareThreshTimestamp = current;
       }
@@ -584,7 +615,7 @@ void WiFiEvent(WiFiEvent_t event)
 void handleConfig(AsyncWebServerRequest *request)
 {
   printConfig();
-  request->send(LittleFS, configFile, "application/json");
+  request->send(fsConfig, configFile, "application/json");
 }
 
 void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
@@ -605,7 +636,7 @@ void handleConfigUpdate(AsyncWebServerRequest *request, uint8_t *data, size_t le
     }
 
     // open file
-    File file = LittleFS.open(configFile, FILE_WRITE);
+    File file = fsConfig.open(configFile, FILE_WRITE);
 
     // Serialize JSON to file
     if (serializeJson(doc, file) == 0)
@@ -628,7 +659,7 @@ void handeMeasurementsUpload(AsyncWebServerRequest *request, String filename, si
 {
   Serial.printf("Replace measurements file. CSV size: %d bytes\n", len);
   // open new file if index is zero, else append data
-  File file = LittleFS.open(measurementsFile, index == 0 ? FILE_WRITE : FILE_APPEND);
+  File file = fsConfig.open(measurementsFile, index == 0 ? FILE_WRITE : FILE_APPEND);
 
   // write data
   file.write(data, len);
@@ -666,8 +697,8 @@ void handleMeasurements(AsyncWebServerRequest *request)
     {
       // Serial.println("deleting...");
       auto tmpMeasurementsFile = measurementsFile + "_tmp";
-      auto oldFile = LittleFS.open(measurementsFile, FILE_READ);
-      auto newFile = LittleFS.open(tmpMeasurementsFile, FILE_WRITE);
+      auto oldFile = fsConfig.open(measurementsFile, FILE_READ);
+      auto newFile = fsConfig.open(tmpMeasurementsFile, FILE_WRITE);
 
       // read old file and write lines to new file that are not deleted list elements
       auto line = oldFile.readStringUntil('\n');
@@ -704,24 +735,24 @@ void handleMeasurements(AsyncWebServerRequest *request)
       newFile.close();
 
       // replace with new measurements file
-      LittleFS.remove(measurementsFile);
-      LittleFS.rename(tmpMeasurementsFile, measurementsFile);
+      fsConfig.remove(measurementsFile);
+      fsConfig.rename(tmpMeasurementsFile, measurementsFile);
 
       request->send(200);
     }
   }
 
-  request->send(LittleFS, measurementsFile, "text/csv");
+  request->send(fsConfig, measurementsFile, "text/csv");
 }
 
 void handleSystem(AsyncWebServerRequest *request)
 {
   StaticJsonDocument<512> doc;
   auto flash = doc.createNestedObject("flash");
-  flash["total"] = LittleFS.totalBytes();
-  flash["used"] = LittleFS.usedBytes();
-  flash["config"] = LittleFS.open(configFile, FILE_READ).size();
-  flash["measurements"] = LittleFS.open(measurementsFile, FILE_READ).size();
+  flash["total"] = fsConfig.totalBytes();
+  flash["used"] = fsConfig.usedBytes();
+  flash["config"] = fsConfig.open(configFile, FILE_READ).size();
+  flash["measurements"] = fsConfig.open(measurementsFile, FILE_READ).size();
   auto wifi = doc.createNestedObject("wifi");
   wifi["rssi"] = WiFi.RSSI();
   auto system = doc.createNestedObject("system");
@@ -770,7 +801,7 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
 
 bool loadConfig()
 {
-  File file = LittleFS.open(configFile, FILE_READ);
+  File file = fsConfig.open(configFile, FILE_READ);
 
   if (!file)
   {
@@ -810,7 +841,7 @@ bool loadConfig()
 bool saveConfig()
 {
   // Open file for writing
-  File file = LittleFS.open(configFile, FILE_WRITE);
+  File file = fsConfig.open(configFile, FILE_WRITE);
   if (!file)
   {
     Serial.println(F("Failed to create file"));
@@ -850,7 +881,7 @@ bool saveConfig()
 void printConfig()
 {
   // Open file for reading
-  File file = LittleFS.open(configFile, FILE_READ);
+  File file = fsConfig.open(configFile, FILE_READ);
   if (!file)
   {
     Serial.println(F("Failed to read file"));
@@ -919,26 +950,32 @@ void sendMQTTCatWeights()
   }
 }
 
+void createMeasurementsFile()
+{
+  if (!fsConfig.exists(measurementsFile))
+  {
+
+    File f = fsConfig.open(measurementsFile, FILE_APPEND, true);
+
+    if (!f)
+    {
+      Serial.printf("Cannot open measurements file %s\n", measurementsFile);
+    }
+
+    f.println("time,weight,std,duration,dropping");
+
+    f.close();
+  }
+}
+
 bool writeMeasurement(CatMeasurement &m)
 {
-
-  bool writeHeader = false;
-  if (!LittleFS.exists(measurementsFile))
-  {
-    writeHeader = true;
-  }
-
-  File f = LittleFS.open(measurementsFile, FILE_APPEND, true);
+  File f = fsConfig.open(measurementsFile, FILE_APPEND, true);
 
   if (!f)
   {
     Serial.printf("Cannot open measurements file %s\n", measurementsFile);
     return false;
-  }
-
-  if (writeHeader)
-  {
-    f.println("time,weight,std,duration,dropping");
   }
 
   f.printf("%ld,%hu,%.2f,%.2f,%hu", m.time, m.weight, m.std, m.duration, m.weightDropping);
