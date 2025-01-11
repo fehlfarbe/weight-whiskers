@@ -251,6 +251,8 @@ void setup()
   server.on("/api/raw", HTTP_GET, [](AsyncWebServerRequest *request)
             { request->send(fsConfig, "/rawvalues.csv", "text/csv"); });
   server.on("/api/system", HTTP_GET, handleSystem);
+  server.on("/api/reboot", HTTP_GET, [](AsyncWebServerRequest *request)
+            { ESP.restart(); });
   // attach AsyncWebSocket
   ws.onEvent(onEvent);
   server.addHandler(&ws);
