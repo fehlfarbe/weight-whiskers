@@ -1,5 +1,6 @@
 import React, { ChangeEvent, useEffect, useState } from "react";
 import { Datum, ResponsiveLine, Serie } from '@nivo/line'
+import { ResponsiveBar } from '@nivo/bar'
 import Papa from "papaparse";
 import { LoadingImage } from "./Loading";
 
@@ -29,6 +30,20 @@ class MeasurementData implements Serie {
   data: Array<Point> = [];
 }
 
+type HistogramDatum = {
+  hour: number,
+  value: number
+}
+
+const CreateEmptyHistogram = () => {
+  let histogram: HistogramDatum[] = [];
+  for (var i = 0; i < 24; i++) {
+    histogram.push({ hour: i, value: 0 });
+  }
+  return histogram;
+}
+
+
 enum MeasurementFilter {
   LastMonth = "Last month",
   LastThreeMonths = "Last three months",
@@ -39,6 +54,7 @@ enum MeasurementFilter {
 const MeasurementHistory = () => {
   const [dataFilter, setDataFilter] = useState<MeasurementFilter>(MeasurementFilter.LastMonth);
   const [filteredData, setFilteredData] = useState<Array<MeasurementData>>([new MeasurementData()]);
+  const [histogramData, setHistogramData] = useState<Array<HistogramDatum>>(CreateEmptyHistogram());
   const [allData, setAllData] = useState<Array<MeasurementData>>([new MeasurementData()]);
   const commonConfig = { delimiter: ",", dynamicTyping: true };
 
@@ -67,7 +83,7 @@ const MeasurementHistory = () => {
       startDate.setMinutes(0);
       startDate.setSeconds(0);
       measurements.data = allData[0].data.filter(d => {
-        if(d.rawData == undefined) {
+        if (d.rawData == undefined) {
           return false;
         }
         // compare timestamps to prevent different data formats
@@ -75,8 +91,17 @@ const MeasurementHistory = () => {
       });
       measurements.id = allData[0].id;
     }
+    // calculate histogram
+    let newHistogram = CreateEmptyHistogram();
+    measurements.data.forEach(element => {
+      if (element.rawData?.time) {
+        let date = new Date(element.rawData?.time * 1000);
+        newHistogram[date.getHours()].value++;
+      }
+    });
     // update data
     setFilteredData([measurements]);
+    setHistogramData(newHistogram);
   }
 
   // on click table element
@@ -211,6 +236,7 @@ const MeasurementHistory = () => {
       <h1>Measurements</h1>
       {allData[0].data.length == 0 ? <LoadingImage></LoadingImage> : null}
       <div style={{ textAlign: "center" }}>
+        <div>Show data for</div>
         <select value={dataFilter} onChange={updateMeasurementsFilter}>
           {
             Object.values(MeasurementFilter).map(value => (
@@ -219,6 +245,7 @@ const MeasurementHistory = () => {
           }
         </select>
       </div>
+      <h2>Measured weight</h2>
       <div style={{ height: "500px" }}>
         <ResponsiveLine
           enableSlices="x"
@@ -278,10 +305,88 @@ const MeasurementHistory = () => {
           }}
         />
       </div>
+      <h2>Cat litter box usage by hour</h2>
+      <div style={{ height: "500px" }}>
+        <ResponsiveBar
+          data={histogramData}
+          keys={[
+            'value',
+          ]}
+          indexBy="hour"
+          margin={{ top: 50, right: 0, bottom: 50, left: 60 }}
+          padding={0.3}
+          valueScale={{ type: 'linear' }}
+          indexScale={{ type: 'band', round: true }}
+          colors={{ scheme: 'nivo' }}
+          defs={[
+            {
+              id: 'dots',
+              type: 'patternDots',
+              background: 'inherit',
+              color: '#38bcb2',
+              size: 4,
+              padding: 1,
+              stagger: true
+            },
+            {
+              id: 'lines',
+              type: 'patternLines',
+              background: 'inherit',
+              color: '#eed312',
+              rotation: -45,
+              lineWidth: 6,
+              spacing: 10
+            }
+          ]}
+          borderColor={{
+            from: 'color',
+            modifiers: [
+              [
+                'darker',
+                1.6
+              ]
+            ]
+          }}
+          axisTop={null}
+          axisRight={null}
+          axisBottom={{
+            tickSize: 5,
+            tickPadding: 5,
+            tickRotation: 0,
+            legend: 'Hour of day',
+            legendPosition: 'middle',
+            legendOffset: 32,
+            truncateTickAt: 0
+          }}
+          axisLeft={{
+            tickSize: 5,
+            tickPadding: 5,
+            tickRotation: 0,
+            legend: 'Number of pees',
+            legendPosition: 'middle',
+            legendOffset: -40,
+            truncateTickAt: 0
+          }}
+          labelSkipWidth={12}
+          labelSkipHeight={12}
+          labelTextColor={{
+            from: 'color',
+            modifiers: [
+              [
+                'darker',
+                1.6
+              ]
+            ]
+          }}
+          role="application"
+          ariaLabel="Cat litter box usage by hour"
+          barAriaLabel={e => e.id + ": " + e.formattedValue + " on hour: " + e.indexValue}
+        />
+      </div>
     </div>
     <div>
-      <table className="hoverable" style={{overflowX: "hidden"}}>
-        <caption>Measurements</caption>
+      <table className="hoverable" style={{ overflowX: "hidden" }}>
+        <caption>Measurements table</caption>
         <thead>
           <tr>
             <th>Date</th>
