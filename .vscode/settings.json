@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "*.tcc": "cpp",
+        "regex": "cpp",
+        "fstream": "cpp"
+    },
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.clang_format_fallbackStyle": "{ BasedOnStyle: WebKit, ColumnLimit: 100, SortIncludes: false }",
+    "search.useIgnoreFiles": false,
+    "cmake.configureOnOpen": true,
+}
