@@ -4,8 +4,9 @@
   "private": true,
   "dependencies": {
     "@hookform/resolvers": "^3.1.1",
-    "@nivo/core": "^0.83.0",
-    "@nivo/line": "^0.83.0",
+    "@nivo/bar": "^0.88.0",
+    "@nivo/core": "^0.88.0",
+    "@nivo/line": "^0.88.0",
     "@rjsf/core": "^5.10.0",
     "@rjsf/utils": "^5.10.0",
     "@rjsf/validator-ajv8": "^5.10.0",

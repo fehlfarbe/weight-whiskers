@@ -28,3 +28,6 @@ for f in $(find ${APP_WWW}); do
         # du -h ${f}.br
     fi
 done
+
+echo "www size:"
+echo "$(du -h ${APP_WWW})"
