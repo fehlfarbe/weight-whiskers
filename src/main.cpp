@@ -21,7 +21,7 @@
 #include "Display.h"
 
 // Debug
-#define SAVE_RAW_VAL 1
+#define SAVE_RAW_VAL 0
 // Button
 #define ENCODER_BTN 9
 #define ENCODER_A 7
@@ -83,7 +83,9 @@ struct CatMeasurement {
     // weight of poo/urine "dropping"
     uint16_t weightDropping = 0;
 };
-CatMeasurement measuredCatWeightsBuffer[20];
+
+#define MEASUREMENTS_BUFFER_SIZE 20
+CatMeasurement measuredCatWeightsBuffer[MEASUREMENTS_BUFFER_SIZE];
 int measuredCatWeightsCounter = 0;
 CatMeasurement lastMeasurement;
 
@@ -279,8 +281,8 @@ void setup()
         display.drawOTA(1.);
     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        float percentage = progress / (total / 100);
-        Serial.printf("Update:%u%%\r", percentage);
+        float percentage = (1. / total) * progress;
+        Serial.printf("Update:%u%%\r", percentage * 100);
         display.drawOTA(percentage);
     });
     ArduinoOTA.onError([](ota_error_t error) {
@@ -336,8 +338,8 @@ void loop()
         auto raw = scale.get_value();
         weightLowPass.input(weight);
         weightLowPass.print();
-        Serial.printf("Current measurement=%fg raw=%f lowPass=%f up since=%d\n", weight, raw,
-            weightLowPass.output(), startTime);
+        Serial.printf("Current measurement=%fg raw=%f lowPass=%f Y=%f up since=%d mqtt buffer=%d\n", weight, raw,
+            weightLowPass.output(), weightLowPass.Y, startTime, measuredCatWeightsCounter);
         if (current - scaleLastWSTimestamp > SCALE_WS_DELAY_MS) {
             ws.printfAll("{\"timestamp\": %lu, \"weight\": %f, \"weight_unfiltered\": %f}", current,
                 weightLowPass.output(), weight);
@@ -403,9 +405,13 @@ void loop()
                 measurement.std = bestWeightStd;
                 measurement.duration = duration;
                 measurement.weightDropping = max(0, (int)scale.get_units(10));
-                measuredCatWeightsBuffer[measuredCatWeightsCounter]
-                    = measurement; // save value to send via mqtt
-                measuredCatWeightsCounter++;
+                if (measuredCatWeightsCounter < MEASUREMENTS_BUFFER_SIZE) {
+                    measuredCatWeightsBuffer[measuredCatWeightsCounter]
+                        = measurement; // save value to send via mqtt
+                    measuredCatWeightsCounter++;
+                } else {
+                    ESP_LOGW(TAG, "MQTT measurements buffer full!");
+                }
                 lastMeasurement = measurement;
                 writeMeasurement(measurement);
             }
@@ -872,7 +878,7 @@ void sendMQTTCatWeights()
 
     if (measuredCatWeightsCounter) {
 
-        for (size_t i = 0; i < measuredCatWeightsCounter; i++) {
+        for (size_t i = 0; i < min(measuredCatWeightsCounter, MEASUREMENTS_BUFFER_SIZE); i++) {
             // reconnect WiFi
             if (!WiFi.isConnected()) {
                 Serial.println("WiFI currently not connected!");
@@ -882,7 +888,7 @@ void sendMQTTCatWeights()
             // reconnect to MQTT
             if (!mqtt.connected()) {
                 auto connected = mqtt.connect("cat_scale");
-                Serial.printf("Connected to MQTT %d\n", connected);
+                Serial.printf("Connected to MQTT: %d\n", connected);
                 if (!connected) {
                     return;
                 }
@@ -895,7 +901,9 @@ void sendMQTTCatWeights()
                 + ",duration=" + String(measuredCatWeightsBuffer[i].duration);
             Serial.printf("Send MQTT message on topic %s: %s\n",
                 config.mqtt_topic_cat_weight.c_str(), msg.c_str());
-            mqtt.publish(config.mqtt_topic_cat_weight.c_str(), msg.c_str());
+            if(!mqtt.publish(config.mqtt_topic_cat_weight.c_str(), msg.c_str())){
+                ESP_LOGE(TAG, "Could not publish MQTT message!");
+            }
         }
 
         // disconnect from MQTT

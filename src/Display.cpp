@@ -170,7 +170,7 @@ namespace weightwhiskers
         display.setTextSize(2);
         display.setTextColor(WHITE);
         display.setCursor(0, 0);
-        display.printf("Update:%u%%", (uint8_t)percentage * 100);
+        display.printf("Update:%u%%", (uint8_t)(percentage*100));
         display.writeFillRect(0, display.height() - 10, display.width() * percentage, display.height(), WHITE);
         display.display();
     }
