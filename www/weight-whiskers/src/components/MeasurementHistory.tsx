@@ -195,6 +195,56 @@ const MeasurementHistory = () => {
     ));
   };
 
+  const MovingAverageLine = (props: any) => {
+    const { series, xScale, yScale } = props;
+
+    // Dynamic window size depending on the data length
+    // Min 5, max 15% of data points
+    const calculateWindowSize = (dataLength: number): number => {
+      const minWindow = 5;
+      const maxWindow = Math.ceil(dataLength * 0.05);
+      // odd number for symmetric window
+      return Math.max(maxWindow, minWindow) | 1;
+    };
+
+    const windowSize = calculateWindowSize(series[0].data.length);
+    const movingAverage = series[0].data.map((point: any, index: number, array: any[]) => {
+      const start = Math.max(0, index - Math.floor(windowSize / 2));
+      const end = Math.min(array.length, index + Math.floor(windowSize / 2) + 1);
+      const window = array.slice(start, end);
+      const sum = window.reduce((acc: number, curr: any) => acc + curr.data.y, 0);
+      return {
+        x: point.data.x,
+        y: sum / window.length
+      };
+    });
+
+    const linePath = `M ${movingAverage.map((p: any) =>
+      `${xScale(p.x)},${yScale(p.y)}`).join(' L ')}`;
+
+    return (
+      <>
+        {/* Äußere Linie für bessere Sichtbarkeit */}
+        <path
+          d={linePath}
+          fill="none"
+          stroke="white"
+          strokeWidth={6}
+          strokeLinecap="round"
+          strokeOpacity={0.8}
+        />
+        {/* Innere Linie */}
+        <path
+          d={linePath}
+          fill="none"
+          stroke="#ff0000"
+          strokeWidth={4}
+          strokeLinecap="round"
+        />
+      </>
+    );
+  };
+
   // load all measurements
   useEffect(() => {
     if (allData[0].data.length == 0) {
@@ -282,16 +332,16 @@ const MeasurementHistory = () => {
           // enableArea={true}
           useMesh={true}
           layers={[
-            StdDevLine,
-            SelectedMeasurements,
             'grid',
             'markers',
             'areas',
-            'crosshair',
+            StdDevLine,
             'lines',
-            'slices',
+            SelectedMeasurements,
+            'crosshair',
             'axes',
             'points',
+            MovingAverageLine, // Moved to end for visibility
             'legends',
           ]}
           theme={{
