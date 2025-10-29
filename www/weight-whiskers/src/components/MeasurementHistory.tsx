@@ -49,12 +49,26 @@ enum MeasurementFilter {
   AllData = "All data"
 }
 
+const useWindowSize = () => {
+  const [size, setSize] = useState([window.innerWidth, window.innerHeight]);
+
+  useEffect(() => {
+    const updateSize = () => {
+      setSize([window.innerWidth, window.innerHeight]);
+    };
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
+
+  return size;
+}
 
 const MeasurementHistory = () => {
   const [dataFilter, setDataFilter] = useState<MeasurementFilter>(MeasurementFilter.LastMonth);
   const [filteredData, setFilteredData] = useState<Array<MeasurementData>>([new MeasurementData()]);
   const [histogramData, setHistogramData] = useState<Array<HistogramDatum>>(CreateEmptyHistogram());
   const [allData, setAllData] = useState<Array<MeasurementData>>([new MeasurementData()]);
+  const [windowWidth] = useWindowSize();
   const commonConfig = { delimiter: ",", dynamicTyping: true };
 
   // update measurements filter via dropdown
@@ -385,6 +399,14 @@ const MeasurementHistory = () => {
             legend: 'date',
             legendOffset: 110,
             legendPosition: 'middle',
+            tickValues: filteredData[0].data
+              .filter((_, index) => {
+                // calculate maximum number of labels based on window width
+                const maxLabels = Math.max(5, Math.floor(windowWidth / 100));
+                const skipFactor = Math.ceil(filteredData[0].data.length / maxLabels);
+                return index % skipFactor === 0;
+              })
+              .map(d => d.x)
           }}
           axisLeft={{
             tickSize: 5,
@@ -475,7 +497,11 @@ const MeasurementHistory = () => {
             legend: 'Hour of day',
             legendPosition: 'middle',
             legendOffset: 32,
-            truncateTickAt: 0
+            truncateTickAt: 0,
+            // show only every 2nd value
+            tickValues: histogramData
+              .filter((_, index) => index % 2 === 0)
+              .map(d => d.hour)
           }}
           axisLeft={{
             tickSize: 5,
