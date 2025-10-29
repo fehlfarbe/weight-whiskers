@@ -43,7 +43,6 @@ const CreateEmptyHistogram = () => {
   return histogram;
 }
 
-
 enum MeasurementFilter {
   LastMonth = "Last month",
   LastThreeMonths = "Last three months",
@@ -67,8 +66,11 @@ const MeasurementHistory = () => {
   // filter data
   const filterMeasurements = () => {
     var measurements = new MeasurementData();
-    if (dataFilter == MeasurementFilter.AllData) {
-      measurements = allData[0];
+    const isAllData = dataFilter === MeasurementFilter.AllData;
+    if (isAllData) {
+      // create deep copy
+      measurements.data = JSON.parse(JSON.stringify(allData[0].data));
+      measurements.id = allData[0].id;
     } else {
       var startDate = new Date();
       switch (dataFilter) {
@@ -83,12 +85,13 @@ const MeasurementHistory = () => {
       startDate.setMinutes(0);
       startDate.setSeconds(0);
       measurements.data = allData[0].data.filter(d => {
-        if (d.rawData == undefined) {
+        if (d.rawData === undefined) {
           return false;
         }
         // compare timestamps to prevent different data formats
         return d.rawData?.time > startDate.getTime() / 1000.;
       });
+
       measurements.id = allData[0].id;
     }
     // calculate histogram
@@ -99,6 +102,13 @@ const MeasurementHistory = () => {
         newHistogram[date.getHours()].value++;
       }
     });
+
+    // aggregate data if necessary
+    if (measurements.data.length > 500) {
+      const targetPoints = isAllData ? 600 : 300;
+      measurements.data = aggregateData(measurements.data, targetPoints);
+    }
+
     // update data
     setFilteredData([measurements]);
     setHistogramData(newHistogram);
@@ -108,7 +118,7 @@ const MeasurementHistory = () => {
   const selectPoint = (event: React.MouseEvent<HTMLTableRowElement>, id: number) => {
     event.preventDefault();
     var history = filteredData[0];
-    var idx = history.data.findIndex(item => item.id == id);
+    var idx = history.data.findIndex(item => item.id === id);
     history.data[idx].selected = !history.data[idx].selected;
     setFilteredData([
       { ...history, data: history.data }
@@ -137,7 +147,7 @@ const MeasurementHistory = () => {
     })
       .then((response) => {
         console.log(response.status);
-        if (response.status == 200) {
+        if (response.status === 200) {
           setAllData([
             {
               ...allData[0],
@@ -245,9 +255,67 @@ const MeasurementHistory = () => {
     );
   };
 
+  const aggregateData = (data: Point[], targetPoints: number = 300): Point[] => {
+    // calculate group size by days
+    const totalDays = (data[data.length - 1].rawData!.time - data[0].rawData!.time) / (24 * 3600);
+    const daysPerGroup = Math.max(1, Math.ceil(totalDays / targetPoints));
+
+    // group data by time intervals
+    const groups = new Map<string, Point[]>();
+
+    data.forEach(point => {
+      if (!point.rawData) return;
+
+      // calculate group numer based on daysPerGroup
+      const daysSinceStart = Math.floor((point.rawData.time - data[0].rawData!.time) / (24 * 3600));
+      const groupNum = Math.floor(daysSinceStart / daysPerGroup);
+      const groupKey = `group_${groupNum}`;
+
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, []);
+      }
+      groups.get(groupKey)?.push(point);
+    });
+
+    // calculate average by group
+    const aggregatedData: Point[] = [];
+    groups.forEach((points) => {
+      const avgWeight = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+      const avgStd = points.reduce((sum, p) => sum + (p.rawData?.std || 0), 0) / points.length;
+      const middlePoint = points[Math.floor(points.length / 2)];
+      const timestamp = middlePoint.rawData?.time || 0;
+
+      // format date based on group size
+      let dateStr;
+      if (daysPerGroup === 1) {
+        dateStr = new Date(timestamp * 1000).toLocaleDateString();
+      } else {
+        const startDate = new Date(points[0].rawData!.time * 1000).toLocaleDateString();
+        const endDate = new Date(points[points.length - 1].rawData!.time * 1000).toLocaleDateString();
+        dateStr = `${startDate} - ${endDate}`;
+      }
+
+      aggregatedData.push({
+        id: timestamp,
+        x: dateStr,
+        y: avgWeight,
+        selected: points.some(p => p.selected),
+        rawData: {
+          time: timestamp,
+          weight: avgWeight,
+          std: avgStd,
+          duration: 0,
+          dropping: 0
+        }
+      });
+    });
+
+    return aggregatedData.sort((a, b) => (a.rawData?.time || 0) - (b.rawData?.time || 0));
+  };
+
   // load all measurements
   useEffect(() => {
-    if (allData[0].data.length == 0) {
+    if (allData[0].data.length === 0) {
       // load data
       Papa.parse(
         "/api/measurements",
@@ -284,7 +352,7 @@ const MeasurementHistory = () => {
   return <>
     <div>
       <h1>Measurements</h1>
-      {allData[0].data.length == 0 ? <LoadingImage></LoadingImage> : null}
+      {allData[0].data.length === 0 ? <LoadingImage></LoadingImage> : null}
       <div style={{ textAlign: "center" }}>
         <div>Show data for</div>
         <select value={dataFilter} onChange={updateMeasurementsFilter}>
@@ -337,6 +405,7 @@ const MeasurementHistory = () => {
             'areas',
             StdDevLine,
             'lines',
+            'slices',
             SelectedMeasurements,
             'crosshair',
             'axes',
