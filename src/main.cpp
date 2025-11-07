@@ -83,22 +83,23 @@ struct CatMeasurement {
     // weight of poo/urine "dropping"
     uint16_t weightDropping = 0;
 };
-
-#define MEASUREMENTS_BUFFER_SIZE 20
-CatMeasurement measuredCatWeightsBuffer[MEASUREMENTS_BUFFER_SIZE];
-int measuredCatWeightsCounter = 0;
 CatMeasurement lastMeasurement;
 
-fs::LittleFSFS fsWWW;
-fs::LittleFSFS fsConfig;
+// fs::LittleFSFS fsWWW;
+// fs::LittleFSFS fsConfig;
+#define fsWWW LittleFS
+#define fsConfig LittleFS
 String measurementsFile = "/measurements.csv";
 String configFile = "/config.json";
 
 // Config
 struct Config {
     // MQTT
+    bool mqtt_enabled = false;
     String mqtt_server = "";
     int mqtt_port = 1883;
+    String mqtt_user = "kitty";
+    String mqtt_pass = "kitty";
     String mqtt_topic_cat_weight = "home/cat/scale/measured";
     String mqtt_topic_current_weight = "home/cat/scale/current";
     // scale
@@ -113,6 +114,11 @@ struct Config {
 };
 
 Config config;
+
+// MQTT
+TaskHandle_t pTaskMQTT;
+QueueHandle_t qMQTT = xQueueCreate(5, sizeof(CatMeasurement));
+SemaphoreHandle_t semMQTT;
 
 // WiFi
 WiFiClient espClient;
@@ -143,20 +149,23 @@ void handleSystem(AsyncWebServerRequest* request);
 void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg,
     uint8_t* data, size_t len);
 void setupMQTT();
-void sendMQTTCatWeights();
+void sendMQTTCatWeights(const CatMeasurement& measurement);
 void createMeasurementsFile();
 bool writeMeasurement(CatMeasurement& m);
 void playToneStart();
 void playToneSuccess();
+void taskMQTT(void* parameter);
 
 void IRAM_ATTR readEncoderISR() { encoder.readEncoder_ISR(); }
 
 void setup()
 {
+    esp_log_level_set(TAG, ESP_LOG_VERBOSE);
 
     // Serial
     Serial.begin(115200);
-    Serial.println("Cat scale");
+    Serial.setDebugOutput(true);
+    ESP_LOGI(TAG, "Weight whiskers");
 
     // setup pins
     pinMode(BUZZER, OUTPUT);
@@ -182,8 +191,8 @@ void setup()
     playToneStart();
 
     // config filesystem and config
-    if (!fsConfig.begin(true, "/littlefs", 10, "config")) {
-        Serial.println("An Error has occurred while mounting config");
+    if (!fsConfig.begin(true, "/littlefs", 10, "spiffs")) {
+        ESP_LOGE(TAG, "An Error has occurred while mounting config");
         display.drawError("FS Error");
         while (true) {
             leds[0] = CRGB::Red;
@@ -198,6 +207,7 @@ void setup()
     // load config or create config file with default values if not existing
     listDir(fsConfig, "/", 4);
     if (!loadConfig()) {
+        ESP_LOGI(TAG, "Cannot load config, saving default config file");
         saveConfig();
     }
     printConfig();
@@ -208,7 +218,7 @@ void setup()
     listDir(fsConfig, "/", 4);
 
     // Setup WiFi
-    Serial.println("WiFi autoconnect...");
+    ESP_LOGI(TAG, "WiFi autoconnect...");
     display.drawWiFi();
     WiFi.setAutoReconnect(true);
     WiFi.onEvent(WiFiEvent);
@@ -219,24 +229,23 @@ void setup()
 
     // setup mDNS
     MDNS.begin("weight-whiskers");
-    Serial.println("Visit the config site at http://weight-whiskers.local");
+    ESP_LOGI(TAG, "Visit the config site at http://weight-whiskers.local");
 
     // Set up required URL handlers on the web server.
     // static files, cached for 1 month
-    // config filesystem and config
-    if (!fsWWW.begin(true, "/littlefs", 10, "www")) {
-        Serial.println("An Error has occurred while mounting www");
-        display.drawError("FS Error");
-        while (true) {
-            leds[0] = CRGB::Yellow;
-            FastLED.show();
-            delay(500);
-            leds[0] = CRGB::Black;
-            FastLED.show();
-            delay(500);
-        }
-    }
-    listDir(fsConfig, "/", 4);
+    // if (!fsWWW.begin(true, "/www", 10, "www")) {
+    //     Serial.println("An Error has occurred while mounting www");
+    //     display.drawError("FS Error");
+    //     while (true) {
+    //         leds[0] = CRGB::Yellow;
+    //         FastLED.show();
+    //         delay(500);
+    //         leds[0] = CRGB::Black;
+    //         FastLED.show();
+    //         delay(500);
+    //     }
+    // }
+    listDir(fsWWW, "/", 4);
     server.serveStatic("/", fsWWW, "/www/")
         .setDefaultFile("index.html")
         .setCacheControl("max-age=2678400");
@@ -264,7 +273,11 @@ void setup()
     time(&startTime);
 
     // setup MQTT
+    semMQTT = xSemaphoreCreateBinary();
+    xSemaphoreGive(semMQTT);
     setupMQTT();
+    xTaskCreate(taskMQTT, "taskMQTT", getArduinoLoopTaskStackSize(), NULL, 1, &pTaskMQTT);
+
     // setup scale
     setupScale();
 
@@ -273,38 +286,38 @@ void setup()
     ArduinoOTA.setPassword("weight-whiskers");
 
     ArduinoOTA.onStart([]() {
-        Serial.println("Start");
+        ESP_LOGI(TAG, "Start");
         display.drawOTA(0);
     });
     ArduinoOTA.onEnd([]() {
-        Serial.println("OTA Finished!");
+        ESP_LOGI(TAG, "OTA Finished!");
         display.drawOTA(1.);
     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
         float percentage = (1. / total) * progress;
-        Serial.printf("Update:%u%%\r", percentage * 100);
+        ESP_LOGI(TAG, "Update:%u%%\r", percentage * 100);
         display.drawOTA(percentage);
     });
     ArduinoOTA.onError([](ota_error_t error) {
-        Serial.printf("Error[%u]: ", error);
+        ESP_LOGE(TAG, "Error[%u]: ", error);
         display.drawOTA(0);
         if (error == OTA_AUTH_ERROR)
-            Serial.println("Auth Failed");
+            ESP_LOGE(TAG, "Auth Failed");
         else if (error == OTA_BEGIN_ERROR)
-            Serial.println("Begin Failed");
+            ESP_LOGE(TAG, "Begin Failed");
         else if (error == OTA_CONNECT_ERROR)
-            Serial.println("Connect Failed");
+            ESP_LOGE(TAG, "Connect Failed");
         else if (error == OTA_RECEIVE_ERROR)
-            Serial.println("Receive Failed");
+            ESP_LOGE(TAG, "Receive Failed");
         else if (error == OTA_END_ERROR)
-            Serial.println("End Failed");
+            ESP_LOGE(TAG, "End Failed");
     });
     ArduinoOTA.begin();
 
     // success!
     leds[0] = CRGB::Green;
     FastLED.show();
-    Serial.println("Setup finished!");
+    ESP_LOGI(TAG, "Setup finished!");
 }
 
 void loop()
@@ -314,9 +327,6 @@ void loop()
 
     // over the air update
     ArduinoOTA.handle();
-
-    // MQTT
-    mqtt.loop();
 
     // button handling
     if (encoder.isEncoderButtonClicked()) {
@@ -337,16 +347,16 @@ void loop()
         auto weight = scale.get_units(2);
         auto raw = scale.get_value();
         weightLowPass.input(weight);
-        weightLowPass.print();
-        Serial.printf("Current measurement=%fg raw=%f lowPass=%f Y=%f up since=%d mqtt buffer=%d\n", weight, raw,
-            weightLowPass.output(), weightLowPass.Y, startTime, measuredCatWeightsCounter);
+        // weightLowPass.print();
+        ESP_LOGV(TAG, "Current measurement=%fg raw=%f lowPass=%f Y=%f up since=%d\n", weight, raw,
+            weightLowPass.output(), weightLowPass.Y, startTime);
         if (current - scaleLastWSTimestamp > SCALE_WS_DELAY_MS) {
             ws.printfAll("{\"timestamp\": %lu, \"weight\": %f, \"weight_unfiltered\": %f}", current,
                 weightLowPass.output(), weight);
             scaleLastWSTimestamp = current;
         }
     } else {
-        Serial.println("HX711 not found.");
+        ESP_LOGE(TAG, "HX711 not found.");
         return;
     }
 
@@ -392,6 +402,7 @@ void loop()
 #endif
             // cat left the throne, save measurement if minimum presence time was reached
             if (duration > config.presence_time_min) {
+                ESP_LOGI(TAG, "Got new meowsurement!");
                 // show success
                 leds[0] = CRGB::Green;
                 FastLED.show();
@@ -405,15 +416,17 @@ void loop()
                 measurement.std = bestWeightStd;
                 measurement.duration = duration;
                 measurement.weightDropping = max(0, (int)scale.get_units(10));
-                if (measuredCatWeightsCounter < MEASUREMENTS_BUFFER_SIZE) {
-                    measuredCatWeightsBuffer[measuredCatWeightsCounter]
-                        = measurement; // save value to send via mqtt
-                    measuredCatWeightsCounter++;
-                } else {
-                    ESP_LOGW(TAG, "MQTT measurements buffer full!");
-                }
-                lastMeasurement = measurement;
+                // write data to file
                 writeMeasurement(measurement);
+                // send data to MQTT
+                if (config.mqtt_enabled) {
+                    ESP_LOGI(TAG, "MQTT enabled, sending message to queue");
+                    xQueueSend(qMQTT, &lastMeasurement, 0);
+                } else {
+                    ESP_LOGI(TAG, "MQTT not enabled");
+                }
+                // save last measurement
+                lastMeasurement = measurement;
             }
             delay(1000);
             tare(10);
@@ -432,11 +445,6 @@ void loop()
                 tare(10);
             }
         }
-    }
-
-    // send via MQTT
-    if (WiFi.isConnected()) {
-        sendMQTTCatWeights();
     }
 
     // reset LED
@@ -460,7 +468,7 @@ void tare(int count = 10)
 
 void calibrate(long weight)
 {
-    Serial.println("Calibrate...");
+    ESP_LOGI(TAG, "Calibrate...");
 
     // setup scale
     scale.set_scale();
@@ -580,7 +588,7 @@ void WiFiEvent(WiFiEvent_t event)
         break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
         // ESP_LOGI( TAG, "STA IPv4: ");
-        ESP_LOGI(TAG, "%s", WiFi.localIP());
+        ESP_LOGI(TAG, "%s", WiFi.localIP().toString().c_str());
         break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
     case ARDUINO_EVENT_WIFI_STA_LOST_IP:
@@ -598,22 +606,22 @@ void WiFiEvent(WiFiEvent_t event)
 
 void handleConfig(AsyncWebServerRequest* request)
 {
-    printConfig();
+    // printConfig();
+    ESP_LOGI(TAG, "serving config");
     request->send(fsConfig, configFile, "application/json");
 }
 
 void handleConfigUpdate(
     AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total)
 {
-    Serial.printf("Update config. Config size: %d/%d bytes\n", len, total);
+    ESP_LOGI(TAG, "Update config. Config size: %d/%d bytes", len, total);
     if (len == total) {
         DynamicJsonDocument doc(JSON_BUFFER);
         DeserializationError error = deserializeJson(doc, data);
 
         // Test if parsing succeeds.
         if (error) {
-            Serial.print(F("deserializeJson() failed: "));
-            Serial.println(error.c_str());
+            ESP_LOGE(TAG, "deserializeJson() failed: %s", error.c_str());
             request->send(500, "text/html", error.c_str());
             return;
         }
@@ -623,7 +631,7 @@ void handleConfigUpdate(
 
         // Serialize JSON to file
         if (serializeJson(doc, file) == 0) {
-            Serial.println(F("Failed to write to file"));
+            ESP_LOGE(TAG, "Failed to write to file");
             request->send(500, "text/html", "Failed to write to file");
             return;
         }
@@ -632,6 +640,7 @@ void handleConfigUpdate(
         file.close();
 
         // load config and apply new settings
+
         loadConfig();
         applyConfig();
     }
@@ -640,7 +649,7 @@ void handleConfigUpdate(
 void handeMeasurementsUpload(AsyncWebServerRequest* request, String filename, size_t index,
     uint8_t* data, size_t len, bool final)
 {
-    Serial.printf("Replace measurements file. CSV size: %d bytes\n", len);
+    ESP_LOGI(TAG, "Replace measurements file. CSV size: %d bytes\n", len);
     // open new file if index is zero, else append data
     File file = fsConfig.open(measurementsFile, index == 0 ? FILE_WRITE : FILE_APPEND);
 
@@ -653,7 +662,7 @@ void handeMeasurementsUpload(AsyncWebServerRequest* request, String filename, si
 
 void handleMeasurements(AsyncWebServerRequest* request)
 {
-    Serial.printf("Handle measurement method %s\n", request->methodToString());
+    ESP_LOGI(TAG, "Handle measurement method %s\n", request->methodToString());
 
     for (size_t i = 0; i < request->params(); i++) {
         Serial.printf("%s: %s\n", request->getParam(i)->name().c_str(),
@@ -661,7 +670,7 @@ void handleMeasurements(AsyncWebServerRequest* request)
     }
 
     if (request->getParam("measurements", true, true)) {
-        Serial.println("Upload successful");
+        ESP_LOGI(TAG, "Measurements upload successful");
         // file upload successful!
         request->redirect("/");
         return;
@@ -750,22 +759,22 @@ void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType 
 {
     if (type == WS_EVT_CONNECT) {
         // client connected
-        Serial.printf("ws[%s][%u] connect\n", server->url(), client->id());
+        ESP_LOGI(TAG, "ws[%s][%u] connect\n", server->url(), client->id());
         // client->printf("{message: 'Hi!'}", client->id());
         client->ping();
     } else if (type == WS_EVT_DISCONNECT) {
         // client disconnected
-        Serial.printf("ws[%s][%u] disconnect: %u\n", server->url(), client->id());
+        ESP_LOGI(TAG, "ws[%s][%u] disconnect: %u\n", server->url(), client->id());
     } else if (type == WS_EVT_ERROR) {
         // error was received from the other end
-        Serial.printf("ws[%s][%u] error(%u): %s\n", server->url(), client->id(), *((uint16_t*)arg),
+        ESP_LOGI(TAG, "ws[%s][%u] error(%u): %s\n", server->url(), client->id(), *((uint16_t*)arg),
             (char*)data);
     } else if (type == WS_EVT_PONG) {
         // pong message was received (in response to a ping request maybe)
-        Serial.printf("ws[%s][%u] pong[%u]: %s\n", server->url(), client->id(), len,
+        ESP_LOGI(TAG, "ws[%s][%u] pong[%u]: %s\n", server->url(), client->id(), len,
             (len) ? (char*)data : "");
     } else if (type == WS_EVT_DATA) {
-        Serial.println("Got WS data!");
+        ESP_LOGI(TAG, "Got WS data!");
     }
 }
 
@@ -774,23 +783,27 @@ bool loadConfig()
     File file = fsConfig.open(configFile, FILE_READ);
 
     if (!file) {
-        Serial.println("config.json does not exist!");
+        ESP_LOGE(TAG, "config.json does not exist!");
         return false;
     }
 
     // Allocate a temporary JsonDocument
     // Don't forget to change the capacity to match your requirements.
     // Use https://arduinojson.org/v6/assistant to compute the capacity.
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<JSON_BUFFER> doc;
 
     // Deserialize the JSON document
     DeserializationError error = deserializeJson(doc, file);
-    if (error)
-        Serial.println(F("Failed to read file, using default configuration"));
+    if (error){
+        ESP_LOGE(TAG, "Failed to deserialize config file, using default configuration");
+    }
 
     // Copy values from the JsonDocument to the Config
+    config.mqtt_enabled = doc["mqttEnabled"] | config.mqtt_enabled;
     config.mqtt_server = doc["mqttServer"] | config.mqtt_server;
     config.mqtt_port = doc["mqttPort"] | config.mqtt_port;
+    config.mqtt_user = doc["mqttUser"] | config.mqtt_user;
+    config.mqtt_pass = doc["mqttPass"] | config.mqtt_pass;
     config.mqtt_topic_current_weight
         = doc["mqttTopicCurrentWeight"] | config.mqtt_topic_current_weight;
     config.mqtt_topic_cat_weight = doc["mqttTopicCatWeight"] | config.mqtt_topic_cat_weight;
@@ -813,7 +826,7 @@ bool saveConfig()
     // Open file for writing
     File file = fsConfig.open(configFile, FILE_WRITE);
     if (!file) {
-        Serial.println(F("Failed to create file"));
+        ESP_LOGE(TAG, "Failed to open config file");
         return false;
     }
 
@@ -823,8 +836,11 @@ bool saveConfig()
     StaticJsonDocument<512> doc;
 
     // Set the values in the document
+    doc["mqttEnabled"] = config.mqtt_enabled;
     doc["mqttServer"] = config.mqtt_server;
     doc["mqttPort"] = config.mqtt_port;
+    doc["mqttUser"] = config.mqtt_user;
+    doc["mqttPass"] = config.mqtt_pass;
     doc["mqttTopicCurrentWeight"] = config.mqtt_topic_cat_weight;
     doc["mqttTopicCatWeight"] = config.mqtt_topic_current_weight;
 
@@ -837,7 +853,7 @@ bool saveConfig()
 
     // Serialize JSON to file
     if (serializeJson(doc, file) == 0) {
-        Serial.println(F("Failed to write to file"));
+        ESP_LOGE(TAG, "Failed to serialize config to file");
     }
 
     // Close the file
@@ -848,10 +864,12 @@ bool saveConfig()
 
 void printConfig()
 {
+    ESP_LOGD(TAG, "printConfig...");
+    // Serial.flush();
     // Open file for reading
     File file = fsConfig.open(configFile, FILE_READ);
     if (!file) {
-        Serial.println(F("Failed to read file"));
+        ESP_LOGE(TAG, "Failed to read file");
         return;
     }
 
@@ -871,47 +889,44 @@ void applyConfig()
     setupScale();
 }
 
-void setupMQTT() { mqtt.setServer(config.mqtt_server.c_str(), config.mqtt_port); }
+void setupMQTT() { 
+    xSemaphoreTake(semMQTT ,portMAX_DELAY);
+    mqtt.setServer(config.mqtt_server.c_str(), config.mqtt_port);
+    xSemaphoreGive(semMQTT);
+}
 
-void sendMQTTCatWeights()
+void sendMQTTCatWeights(const CatMeasurement& measurement)
 {
-
-    if (measuredCatWeightsCounter) {
-
-        for (size_t i = 0; i < min(measuredCatWeightsCounter, MEASUREMENTS_BUFFER_SIZE); i++) {
-            // reconnect WiFi
-            if (!WiFi.isConnected()) {
-                Serial.println("WiFI currently not connected!");
-                return;
-            }
-
-            // reconnect to MQTT
-            if (!mqtt.connected()) {
-                auto connected = mqtt.connect("cat_scale");
-                Serial.printf("Connected to MQTT: %d\n", connected);
-                if (!connected) {
-                    return;
-                }
-            }
-
-            // send MQTT
-            String msg = "sensors,device=cat_scale,field=cat_weight value="
-                + String(measuredCatWeightsBuffer[i].weight)
-                + ",std=" + String(measuredCatWeightsBuffer[i].std)
-                + ",duration=" + String(measuredCatWeightsBuffer[i].duration);
-            Serial.printf("Send MQTT message on topic %s: %s\n",
-                config.mqtt_topic_cat_weight.c_str(), msg.c_str());
-            if(!mqtt.publish(config.mqtt_topic_cat_weight.c_str(), msg.c_str())){
-                ESP_LOGE(TAG, "Could not publish MQTT message!");
-            }
-        }
-
-        // disconnect from MQTT
-        mqtt.disconnect();
-
-        // reset counter
-        measuredCatWeightsCounter = 0;
+    // check WiFi
+    if (!WiFi.isConnected()) {
+        ESP_LOGE(TAG, "WiFI currently not connected!");
+        return;
     }
+
+    // reconnect to MQTT
+    xSemaphoreTake(semMQTT ,portMAX_DELAY);
+    if (!mqtt.connected()) {
+        ESP_LOGI(TAG, "Connect to MQTT");
+        auto connected = mqtt.connect("cat_scale", config.mqtt_user.c_str(), config.mqtt_pass.c_str());
+        if (!connected) {
+            ESP_LOGE(TAG, "Cannot connect to MQTT");
+            xSemaphoreGive(semMQTT);
+            return;
+        }
+    }
+
+    // send MQTT
+    String msg = "sensors,device=cat_scale,field=cat_weight value=" + String(measurement.weight)
+        + ",std=" + String(measurement.std) + ",duration=" + String(measurement.duration);
+    ESP_LOGV(TAG, "Send MQTT message on topic %s: %s\n", config.mqtt_topic_cat_weight.c_str(),
+        msg.c_str());
+    if (!mqtt.publish(config.mqtt_topic_cat_weight.c_str(), msg.c_str())) {
+        ESP_LOGE(TAG, "Could not publish MQTT message!");
+    }
+
+    // disconnect from MQTT
+    mqtt.disconnect();
+    xSemaphoreGive(semMQTT);
 }
 
 void createMeasurementsFile()
@@ -919,13 +934,11 @@ void createMeasurementsFile()
     if (!fsConfig.exists(measurementsFile)) {
 
         File f = fsConfig.open(measurementsFile, FILE_APPEND, true);
-
         if (!f) {
-            Serial.printf("Cannot open measurements file %s\n", measurementsFile);
+            ESP_LOGE(TAG, "Cannot open measurements file %s\n", measurementsFile);
+        } else {
+            f.println("time,weight,std,duration,dropping");
         }
-
-        f.println("time,weight,std,duration,dropping");
-
         f.close();
     }
 }
@@ -935,9 +948,10 @@ bool writeMeasurement(CatMeasurement& m)
     File f = fsConfig.open(measurementsFile, FILE_APPEND, true);
 
     if (!f) {
-        Serial.printf("Cannot open measurements file %s\n", measurementsFile);
+        ESP_LOGE(TAG, "Cannot open measurements file %s\n", measurementsFile);
         return false;
     }
+    ESP_LOGE(TAG, "Write measurement to file");
 
     f.printf("%ld,%hu,%.2f,%.2f,%hu", m.time, m.weight, m.std, m.duration, m.weightDropping);
     f.println();
@@ -958,4 +972,28 @@ void playToneSuccess()
     String notes1[] = { "C4", "G3", "G3", "A3", "G3", "SILENCE", "B3", "C4" };
     Melody melody1 = MelodyFactory.load("Nice Melody", 250, notes1, 8);
     buzzer.playAsync(melody1);
+}
+
+void taskMQTT(void* parameter)
+{
+    CatMeasurement currentData;
+    while (true) {
+        // just sleep some seconds if mqtt is disabled
+        if (!config.mqtt_enabled) {
+            delay(10000);
+            continue;
+        }
+        if (xQueueReceive(qMQTT, &currentData, 1000 / portTICK_PERIOD_MS) == pdPASS) {
+            // update MQTT
+            // send via MQTT
+            ESP_LOGD(TAG, "Got MQTT message in queue");
+            sendMQTTCatWeights(currentData);
+        } else {
+            ESP_LOGD(TAG, "Got no MQTT message in queue.");
+        }
+
+        xSemaphoreTake(semMQTT ,portMAX_DELAY);
+        mqtt.loop();
+        xSemaphoreGive(semMQTT);
+    }
 }

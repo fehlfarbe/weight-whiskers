@@ -11,6 +11,10 @@ const schema: RJSFSchema = {
   "type": "object",
   "required": [],
   "properties": {
+    "mqttEnabled": {
+      "type": "boolean",
+      "title": "MQTT Enabled"
+    },
     "mqttServer": {
       "type": "string",
       "title": "MQTT Server"
@@ -18,6 +22,14 @@ const schema: RJSFSchema = {
     "mqttPort": {
       "type": "integer",
       "title": "MQTT Port"
+    },
+    "mqttUser": {
+      "type": "string",
+      "title": "MQTT User"
+    },
+    "mqttPass": {
+      "type": "string",
+      "title": "MQTT Password"
     },
     "mqttTopicCatWeight": {
       "type": "string",
@@ -50,6 +62,12 @@ const schema: RJSFSchema = {
   }
 }
 
+const uiSchema: RJSFSchema = {
+  "mqttPass": {
+    "ui:widget": "password"
+  }
+}
+
 function request<TResponse>(
   url: string,
   // `RequestInit` is a type for configuring 
@@ -74,8 +92,11 @@ class InfoMessage {
 
 const ConfigPage = () => {
   const initConfig = {
+    mqttEnabled: false,
     mqttServer: "",
     mqttPort: 0,
+    mqttUser: "kitty",
+    mqttPass: "kitty",
     mqttTopicCatWeight: "",
     mqttTopicCurrentWeight: "",
     scaleCalibValue: 1,
@@ -151,6 +172,7 @@ const ConfigPage = () => {
       {configLoaded
         ? <Form
           schema={schema}
+          uiSchema={uiSchema}
           validator={validator}
           onChange={log('changed')}
           onSubmit={onSubmit}
