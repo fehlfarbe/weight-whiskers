@@ -23,7 +23,7 @@ namespace weightwhiskers
         void drawWiFiAPMode();
         void drawTare();
         void drawCalib(int weight);
-        void drawWeightScreen(int weight = 0, int lastWeight = 0);
+        void drawWeightScreen(int weight = 0, int lastWeight = 0, int loadingBar = -1);
         void drawOTA(float percentage = 0);
 
     protected:

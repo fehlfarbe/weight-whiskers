@@ -87,7 +87,7 @@ namespace weightwhiskers
         display.display();
     }
 
-    void Display::drawWeightScreen(int weight, int lastWeight)
+    void Display::drawWeightScreen(int weight, int lastWeight, int loadingBar)
     {
         display.clearDisplay();
         display.setTextSize(DISPLAY_TEXT_SIZE);
@@ -95,6 +95,11 @@ namespace weightwhiskers
         // draw weight
         display.setCursor(0, 10);
         display.printf("%dg", weight);
+        // draw "loading" bar if cat is currently on the throne
+        if(loadingBar > 0) {
+            int w = min(display.width(), (int16_t)((display.width() / 100.) * loadingBar));
+            display.fillRect(0, 0, w, 4, WHITE);
+        }
 
         // draw last measured weight
         if (lastWeight)

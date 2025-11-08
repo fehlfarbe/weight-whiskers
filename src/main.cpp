@@ -389,7 +389,7 @@ void loop()
                 rawValues.printf("%lu,%.2f,%.2f,%.2f\n", millis() - presenceStart, value,
                     statistics.mean(), statistics.sigma());
 #endif
-                display.drawWeightScreen(weightLowPass.output(), lastMeasurement.weight);
+                display.drawWeightScreen(weightLowPass.output(), lastMeasurement.weight, (100./config.presence_time_min)*duration);
                 // use value with lowes std dev when minimum presence time is reached
                 if (duration > config.presence_time_min && statistics.sigma() < bestWeightStd) {
                     bestWeightStd = statistics.sigma();
