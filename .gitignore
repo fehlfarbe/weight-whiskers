@@ -4,6 +4,8 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 
+experiments
+
 *.zip
 hardware/~*
 hardware/gerbers
