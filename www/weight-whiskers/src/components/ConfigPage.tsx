@@ -5,6 +5,7 @@ import validator from '@rjsf/validator-ajv8';
 import Form, { IChangeEvent } from '@rjsf/core';
 import SystemInfoComponent from "./SystemInfo";
 import { LoadingImage } from "./Loading";
+import HandleCSV from "./HandleCSV";
 
 const schema: RJSFSchema = {
   "title": "Config",
@@ -195,6 +196,10 @@ const ConfigPage = () => {
       </div>
       <div>
         <SystemInfoComponent></SystemInfoComponent>
+      </div>
+      <div>
+        <h1>Measurements</h1>
+        <HandleCSV></HandleCSV>
       </div>
     </>
   );
