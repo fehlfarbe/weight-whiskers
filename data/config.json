@@ -10,5 +10,6 @@
     "scaleCalibWeight": 500,
     "scaleWeightMin": 2000,
     "scaleTareTime": 60000,
-    "scaleTareThresh": 50
+    "scaleTareThresh": 50,
+    "scaleWeightDeviationPercent": 0
 }

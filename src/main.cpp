@@ -111,9 +111,17 @@ struct Config {
     int scale_tare_thresh = 50; // gram
     // presence detection
     float presence_time_min = 5.f;
+    // weight deviation filter (0.0 = disabled, 0.2 = ±20%)
+    float scale_weight_deviation_percent = 0.f;
 };
 
 Config config;
+
+// Weight history for deviation filter (circular buffer for last 5 measurements)
+#define WEIGHT_HISTORY_SIZE 5
+uint16_t weightHistory[WEIGHT_HISTORY_SIZE] = {0};
+int weightHistoryCount = 0; // how many valid measurements we have (0-5)
+int weightHistoryIndex = 0; // current write position in circular buffer
 
 // MQTT
 TaskHandle_t pTaskMQTT;
@@ -151,6 +159,10 @@ void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType 
 void setupMQTT();
 void sendMQTTCatWeights(const CatMeasurement& measurement);
 void createMeasurementsFile();
+void initWeightHistory();
+void addToWeightHistory(uint16_t weight);
+float calculateAverageWeight();
+bool isMeasurementValid(uint16_t weight, float deviationPercent);
 bool writeMeasurement(CatMeasurement& m);
 void playToneStart();
 void playToneSuccess();
@@ -214,6 +226,9 @@ void setup()
 
     // create measurements file if not existing
     createMeasurementsFile();
+    
+    // initialize weight history from existing measurements
+    initWeightHistory();
 
     listDir(fsConfig, "/", 4);
 
@@ -814,6 +829,7 @@ bool loadConfig()
 
     config.scale_tare_time = doc["scaleTareTime"] | config.scale_tare_time;
     config.scale_tare_thresh = doc["scaleTareThresh"] | config.scale_tare_thresh;
+    config.scale_weight_deviation_percent = doc["scaleWeightDeviationPercent"] | config.scale_weight_deviation_percent;
 
     // Close the file (Curiously, File's destructor doesn't close the file)
     file.close();
@@ -850,6 +866,7 @@ bool saveConfig()
 
     doc["scaleTareTime"] = config.scale_tare_time;
     doc["scaleTareThresh"] = config.scale_tare_thresh;
+    doc["scaleWeightDeviationPercent"] = config.scale_weight_deviation_percent;
 
     // Serialize JSON to file
     if (serializeJson(doc, file) == 0) {
@@ -943,8 +960,103 @@ void createMeasurementsFile()
     }
 }
 
+// Initialize weight history from last measurements in CSV
+void initWeightHistory()
+{
+    weightHistoryCount = 0;
+    weightHistoryIndex = 0;
+    
+    File f = fsConfig.open(measurementsFile, FILE_READ);
+    if (!f) {
+        ESP_LOGW(TAG, "Cannot open measurements file for weight history initialization");
+        return;
+    }
+    
+    // Read all lines and keep only last 5
+    String line = f.readStringUntil('\n'); // skip header
+    uint16_t tempWeights[WEIGHT_HISTORY_SIZE * 2];
+    int tempCount = 0;
+    
+    while (line.length() && tempCount < WEIGHT_HISTORY_SIZE * 2) {
+        line = f.readStringUntil('\n');
+        if (line.length() > 0) {
+            // Parse CSV: time,weight,std,duration,dropping
+            int firstComma = line.indexOf(',');
+            int secondComma = line.indexOf(',', firstComma + 1);
+            String weightStr = line.substring(firstComma + 1, secondComma);
+            tempWeights[tempCount] = weightStr.toInt();
+            tempCount++;
+        }
+    }
+    f.close();
+    
+    // Copy last WEIGHT_HISTORY_SIZE measurements to the circular buffer
+    int startIdx = (tempCount > WEIGHT_HISTORY_SIZE) ? (tempCount - WEIGHT_HISTORY_SIZE) : 0;
+    for (int i = startIdx; i < tempCount; i++) {
+        weightHistory[weightHistoryCount] = tempWeights[i];
+        weightHistoryCount++;
+    }
+    
+    ESP_LOGI(TAG, "Weight history initialized with %d measurements", weightHistoryCount);
+}
+
+// Add measurement to weight history (circular buffer)
+void addToWeightHistory(uint16_t weight)
+{
+    weightHistory[weightHistoryIndex] = weight;
+    weightHistoryIndex = (weightHistoryIndex + 1) % WEIGHT_HISTORY_SIZE;
+    
+    if (weightHistoryCount < WEIGHT_HISTORY_SIZE) {
+        weightHistoryCount++;
+    }
+    
+    ESP_LOGV(TAG, "Weight history updated: [%hu, %hu, %hu, %hu, %hu], count=%d",
+             weightHistory[0], weightHistory[1], weightHistory[2], weightHistory[3], weightHistory[4],
+             weightHistoryCount);
+}
+
+// Calculate average weight from history
+float calculateAverageWeight()
+{
+    if (weightHistoryCount == 0) return 0.f;
+    
+    float sum = 0.f;
+    for (int i = 0; i < weightHistoryCount; i++) {
+        sum += weightHistory[i];
+    }
+    return sum / weightHistoryCount;
+}
+
+// Check if measurement is within acceptable deviation
+bool isMeasurementValid(uint16_t weight, float deviationPercent)
+{
+    if (deviationPercent <= 0.f) {
+        return true; // filter disabled
+    }
+    
+    if (weightHistoryCount < WEIGHT_HISTORY_SIZE) {
+        return true; // not enough measurements yet, accept
+    }
+    
+    float avgWeight = calculateAverageWeight();
+    float tolerance = avgWeight * deviationPercent;
+    float diff = abs((float)weight - avgWeight);
+    
+    bool valid = diff <= tolerance;
+    ESP_LOGI(TAG, "Weight validation: weight=%hu, avg=%.0f, tolerance=%.0f, diff=%.0f, valid=%d", 
+             weight, avgWeight, tolerance, diff, valid);
+    
+    return valid;
+}
+
 bool writeMeasurement(CatMeasurement& m)
 {
+    // Check if measurement passes deviation filter
+    if (!isMeasurementValid(m.weight, config.scale_weight_deviation_percent)) {
+        ESP_LOGW(TAG, "Measurement rejected due to deviation filter: %hu", m.weight);
+        return false;
+    }
+    
     File f = fsConfig.open(measurementsFile, FILE_APPEND, true);
 
     if (!f) {
@@ -956,6 +1068,9 @@ bool writeMeasurement(CatMeasurement& m)
     f.printf("%ld,%hu,%.2f,%.2f,%hu", m.time, m.weight, m.std, m.duration, m.weightDropping);
     f.println();
     f.close();
+    
+    // Update weight history with this valid measurement
+    addToWeightHistory(m.weight);
 
     return true;
 }

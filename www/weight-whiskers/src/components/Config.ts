@@ -11,4 +11,5 @@ export interface Config {
   scaleWeightMin: number | undefined;
   scaleTareTime: number | undefined;
   scaleTareThresh: number | undefined;
+  scaleWeightDeviationPercent: number | undefined;
 }

@@ -58,6 +58,11 @@ const schema: RJSFSchema = {
     "scaleTareThresh": {
       "type": "integer",
       "title": "Scale auto tare threshold (gram)"
+    },
+    "scaleWeightDeviationPercent": {
+      "type": "number",
+      "title": "Weight deviation filter (0 = disabled)",
+      "description": "Filter measurements: set to 0.1 for ±10%, 0 to disable"
     }
   }
 }
@@ -103,7 +108,8 @@ const ConfigPage = () => {
     scaleCalibWeight: 500,
     scaleWeightMin: 0,
     scaleTareTime: 0,
-    scaleTareThresh: 0
+    scaleTareThresh: 0,
+    scaleWeightDeviationPercent: 0
   }
 
   const initInfo = {
